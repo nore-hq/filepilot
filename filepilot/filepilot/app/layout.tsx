@@ -1,3 +1,5 @@
+export const runtime = 'edge';
+
 import type { Metadata } from 'next';
 import { Syne } from 'next/font/google';
 // @ts-ignore: allow side-effect CSS import without type declarations
