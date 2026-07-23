@@ -1,3 +1,4 @@
+export const runtime = 'edge';
 import type { Metadata } from 'next';
 
 // ─── Comprehensive SEO for FilePilot (filepilot.norehq.com) ───

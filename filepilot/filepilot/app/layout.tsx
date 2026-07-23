@@ -114,7 +114,7 @@ export const metadata: Metadata = {
     locale: 'en_US',
     images: [
       {
-        url: '/opengraph-image.png',
+        url: 'https://norehq.com/opengraph-image.png',
         width: 1200,
         height: 630,
         alt: 'NoreHQ — Software Studio by ALOK K L, DHANANJAY MOHAN, RAM MADHAV M & KIRAN P MANOJ',
@@ -129,7 +129,7 @@ export const metadata: Metadata = {
     title: 'NoreHQ — Custom Software Development, AI Automation & Web Platforms',
     description:
       'Next-generation software studio by ALOK K L, DHANANJAY MOHAN, RAM MADHAV M & KIRAN P MANOJ. Bespoke web platforms, AI automations, SaaS products, and GPU analytics.',
-    images: ['/twitter-image.png'],
+    images: ['https://norehq.com/twitter-image.png'],
   },
 
   robots: {
