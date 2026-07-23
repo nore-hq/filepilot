@@ -1,0 +1,20 @@
+{
+  "name": "nore-realtime-engine",
+  "version": "1.0.0",
+  "description": "Cloudflare Durable Objects backend for realtime chat",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.5.0",
+    "jose": "^5.6.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260723.1",
+    "typescript": "^5.5.3",
+    "wrangler": "^4.113.0"
+  }
+}

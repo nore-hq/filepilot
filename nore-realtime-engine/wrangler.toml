@@ -1,0 +1,16 @@
+name = "nore-realtime-engine"
+main = "src/index.ts"
+compatibility_date = "2024-07-23"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "CHAT_ROOM", class_name = "ChatRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]
+
+[observability]
+enabled = true
