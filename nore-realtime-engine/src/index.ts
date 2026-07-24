@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 import { ChatRoom, Env } from './chat-room';
 
@@ -6,6 +7,13 @@ import { ChatRoom, Env } from './chat-room';
 export { ChatRoom };
 
 const app = new Hono<{ Bindings: Env; Variables: { user: any } }>();
+
+// Add CORS middleware
+app.use('*', cors({
+  origin: '*',
+  allowHeaders: ['Content-Type', 'Authorization', 'Upgrade'],
+  allowMethods: ['POST', 'GET', 'OPTIONS'],
+}));
 
 // Health check endpoint
 app.get('/', (c) => c.text('NORE Realtime Engine is running!'));
@@ -42,7 +50,7 @@ app.use('/chat/*', async (c, next) => {
   }
 });
 
-// WebSocket entry point
+// Forward WebSocket upgrades to the Durable Object
 app.get('/chat/:roomId', async (c) => {
   const roomId = c.req.param('roomId');
   const upgradeHeader = c.req.header('Upgrade');
@@ -51,12 +59,16 @@ app.get('/chat/:roomId', async (c) => {
     return c.json({ error: 'Expected Upgrade: websocket' }, 426);
   }
 
-  // Get the Durable Object ID based on the room name
-  // This ensures everyone connecting to the same room ID hits the exact same DO instance
   const id = c.env.CHAT_ROOM.idFromName(roomId);
   const room = c.env.CHAT_ROOM.get(id);
+  return room.fetch(c.req.raw);
+});
 
-  // Forward the request to the Durable Object
+// Fallback POST endpoint for broadcasting without a WebSocket connection
+app.post('/chat/:roomId/broadcast', async (c) => {
+  const roomId = c.req.param('roomId');
+  const id = c.env.CHAT_ROOM.idFromName(roomId);
+  const room = c.env.CHAT_ROOM.get(id);
   return room.fetch(c.req.raw);
 });
 

@@ -7,8 +7,14 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-type Project = { id: string; client_name: string; video_title: string; progress: number; delivery_link: string | null; created_at: string; };
-type Message = { id: number; project_id: string; sender_role: 'editor' | 'client'; message_text: string; created_at: string; };
+type ChildEditor = { id: string; name: string; custom_id: string; created_at: string; };
+type Project = { 
+  id: string; client_name: string; video_title: string; progress: number; 
+  delivery_link: string | null; editor_proposed_link: string | null;
+  assigned_editor_id: string | null; editor_can_chat: boolean; editor_can_deliver: boolean;
+  created_at: string; 
+};
+type Message = { id: number; project_id: string; sender_role: 'admin'|'editor'|'client'; target_role: string; message_text: string; created_at: string; };
 
 const CP = 'polygon(0 12px, 12px 0, calc(100% - 12px) 0, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0 calc(100% - 12px))';
 const CPS = 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))';
@@ -23,212 +29,617 @@ function CyberFrame({ children, dark = false, className = '' }: { children: Reac
 
 const circuitBg = `url("data:image/svg+xml,%3Csvg width='400' height='400' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0,80 L100,80 L100,60 L180,60 L180,80 L400,80' stroke='rgba(255,79,0,0.06)' fill='none' stroke-width='0.8'/%3E%3Cpath d='M0,200 L60,200 L60,180 L140,180 L140,200 L260,200 L260,220 L400,220' stroke='rgba(255,79,0,0.06)' fill='none' stroke-width='0.8'/%3E%3Cpath d='M0,320 L120,320 L120,300 L200,300 L200,320 L400,320' stroke='rgba(255,79,0,0.06)' fill='none' stroke-width='0.8'/%3E%3Cpath d='M80,0 L80,60' stroke='rgba(255,79,0,0.06)' fill='none' stroke-width='0.8'/%3E%3Cpath d='M200,0 L200,80 L200,180' stroke='rgba(255,79,0,0.06)' fill='none' stroke-width='0.8'/%3E%3Cpath d='M320,0 L320,100 L320,220 L320,400' stroke='rgba(255,79,0,0.06)' fill='none' stroke-width='0.8'/%3E%3Ccircle cx='100' cy='80' r='3' fill='rgba(255,79,0,0.08)'/%3E%3Ccircle cx='180' cy='60' r='3' fill='rgba(255,79,0,0.08)'/%3E%3Ccircle cx='60' cy='200' r='3' fill='rgba(255,79,0,0.08)'/%3E%3Ccircle cx='140' cy='180' r='3' fill='rgba(255,79,0,0.08)'/%3E%3Ccircle cx='260' cy='200' r='3' fill='rgba(255,79,0,0.08)'/%3E%3Ccircle cx='120' cy='320' r='3' fill='rgba(255,79,0,0.08)'/%3E%3C/svg%3E")`;
 
+const WS_URL = process.env.NEXT_PUBLIC_REALTIME_URL || 'wss://nore-realtime-engine.norehq01.workers.dev';
+
 export default function Dashboard() {
+  const [activeTab, setActiveTab] = useState<'workplace'|'create_client'|'create_editor'|'accounts'>('workplace');
+  
   const [projects, setProjects] = useState<Project[]>([]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [childEditors, setChildEditors] = useState<ChildEditor[]>([]);
+  
   const [newClientName, setNewClientName] = useState('');
   const [newVideoTitle, setNewVideoTitle] = useState('');
+  
+  const [newEditorName, setNewEditorName] = useState('');
+  const [newEditorId, setNewEditorId] = useState('');
+
+  const [localProgress, setLocalProgress] = useState<Record<string, number>>({});
+  const [localAuth, setLocalAuth] = useState<Record<string, { chat?: boolean, deliver?: boolean }>>({});
+  
+  const [justCreatedClient, setJustCreatedClient] = useState<Project | null>(null);
+  const [justCreatedEditor, setJustCreatedEditor] = useState<ChildEditor | null>(null);
+
   const [activeChatProjectId, setActiveChatProjectId] = useState<string | null>(null);
+  const [chatTarget, setChatTarget] = useState<'client' | 'editor' | 'all'>('client');
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState('');
+  
   const [mounted, setMounted] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [savingId, setSavingId] = useState<string | null>(null);
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<Record<string, NodeJS.Timeout>>({});
   const router = useRouter();
 
-  useEffect(() => { setMounted(true); fetchProjects(); }, []);
+  useEffect(() => { setMounted(true); fetchData(); }, []);
+
+  const fetchData = async () => {
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) { router.push('/portal/login'); return; }
+    
+    const [projRes, edRes] = await Promise.all([
+      supabase.from('projects').select('*').eq('admin_id', u.user.id).order('created_at', { ascending: false }),
+      supabase.from('child_editors').select('*').eq('admin_id', u.user.id).order('created_at', { ascending: false })
+    ]);
+    if (projRes.data) setProjects(projRes.data);
+    if (edRes.data) setChildEditors(edRes.data);
+  };
+
+  const fetchMessages = async (pid: string) => {
+    const { data } = await supabase.from('messages').select('*').eq('project_id', pid).order('created_at', { ascending: true });
+    if (data) setChatMessages(data);
+  };
+
+  // WebSocket Connection
   useEffect(() => {
     if (!activeChatProjectId) return;
     fetchMessages(activeChatProjectId);
-    
+
+    let isCancelled = false;
+
     const connectWs = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      
-      const WS_URL = process.env.NEXT_PUBLIC_REALTIME_URL || 'ws://localhost:8787';
-      const ws = new WebSocket(`${WS_URL}/chat/${activeChatProjectId}?token=${session.access_token}`);
+      if (!session || isCancelled) return;
+
+      const ws = new WebSocket(`${WS_URL}/chat/${activeChatProjectId}?token=${session.access_token}&role=admin`);
       wsRef.current = ws;
 
+      ws.onopen = () => {
+        setWsConnected(true);
+        reconnectAttemptRef.current = 0;
+      };
+
       ws.onmessage = (event) => {
-        const payload = JSON.parse(event.data);
-        if (payload.type === 'message') {
-          setChatMessages((prev) => [...prev, {
-            id: Date.now(),
-            project_id: activeChatProjectId,
-            sender_role: payload.sender_role,
-            message_text: payload.content,
-            created_at: payload.timestamp
-          } as Message]);
-        }
+        try {
+          const payload = JSON.parse(event.data);
+          switch (payload.type) {
+            case 'chat':
+              setChatMessages((prev) => [...prev, {
+                id: Date.now(),
+                project_id: activeChatProjectId,
+                sender_role: payload.sender_role,
+                target_role: payload.target_role,
+                message_text: payload.message_text,
+                created_at: payload.timestamp || new Date().toISOString(),
+              }]);
+              break;
+            case 'progress':
+              setProjects((prev) => prev.map(p => p.id === payload.project_id ? { ...p, progress: payload.value } : p));
+              break;
+            case 'delivery':
+              setProjects((prev) => prev.map(p => p.id === payload.project_id ? { ...p, delivery_link: payload.link, editor_proposed_link: null } : p));
+              break;
+            case 'propose_link':
+              setProjects((prev) => prev.map(p => p.id === payload.project_id ? { ...p, editor_proposed_link: payload.link } : p));
+              break;
+            case 'authority_update':
+              setProjects((prev) => prev.map(p => p.id === payload.project_id ? { ...p, editor_can_chat: payload.editor_can_chat, editor_can_deliver: payload.editor_can_deliver } : p));
+              break;
+          }
+        } catch (err) {}
+      };
+
+      ws.onclose = () => {
+        setWsConnected(false);
+        if (isCancelled) return;
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 30000);
+        reconnectAttemptRef.current++;
+        reconnectTimerRef.current = setTimeout(connectWs, delay);
       };
     };
-    
+
     connectWs();
 
-    return () => { 
+    return () => {
+      isCancelled = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) wsRef.current.close();
+      wsRef.current = null;
+      setWsConnected(false);
     };
   }, [activeChatProjectId]);
+
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
-  const fetchProjects = async () => { const { data: u } = await supabase.auth.getUser(); if (!u.user) { router.push('/portal/login'); return; } const { data } = await supabase.from('projects').select('*').eq('editor_id', u.user.id).order('created_at', { ascending: false }); if (data) setProjects(data); };
-  const fetchMessages = async (pid: string) => { const { data } = await supabase.from('messages').select('*').eq('project_id', pid).order('created_at', { ascending: true }); if (data) setChatMessages(data); };
-  const handleCreateProject = async (e: React.FormEvent) => { e.preventDefault(); const { data: u } = await supabase.auth.getUser(); if (!u.user) return; const { data } = await supabase.from('projects').insert([{ client_name: newClientName, video_title: newVideoTitle, editor_id: u.user.id }]).select(); if (data) { setProjects([data[0], ...projects]); setIsModalOpen(false); setNewClientName(''); setNewVideoTitle(''); } };
-  const updateProgress = (id: string, v: number) => setProjects(projects.map(p => p.id === id ? { ...p, progress: v } : p));
-  const updateDeliveryLink = (id: string, link: string) => setProjects(projects.map(p => p.id === id ? { ...p, delivery_link: link } : p));
-  const saveProjectUpdates = async (id: string) => { const p = projects.find(x => x.id === id); if (!p) return; setSavingId(id); await supabase.from('projects').update({ progress: p.progress, delivery_link: p.delivery_link }).eq('id', id); setSavingId(null); };
-  const deleteProject = async (id: string) => { if (!window.confirm('Are you sure you want to delete this dashboard?')) return; setProjects(projects.filter(p => p.id !== id)); await supabase.from('projects').delete().eq('id', id); if (activeChatProjectId === id) setActiveChatProjectId(null); };
-  const sendMessage = async (e: React.FormEvent) => { e.preventDefault(); if (!chatInput.trim() || !activeChatProjectId) return; const newMsg = { project_id: activeChatProjectId, sender_role: 'editor' as const, message_text: chatInput.trim() }; if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify(newMsg)); setChatMessages(prev => [...prev, { ...newMsg, id: Date.now(), created_at: new Date().toISOString() }]); } setChatInput(''); };
-  const copyClientLink = (pid: string) => { const local = window.location.hostname.includes('localhost') || window.location.hostname.includes('127.0.0.1'); const link = local ? `http://localhost:3000/client/${pid}?filepilot=true` : `https://filepilot.norehq.com/client/${pid}`; navigator.clipboard.writeText(link); setCopiedId(pid); setTimeout(() => setCopiedId(null), 2000); };
+  const handleCreateClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newClientName.trim() || !newVideoTitle.trim()) return alert('Fill all fields');
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) return;
+    const { data, error } = await supabase.from('projects').insert([{ client_name: newClientName, video_title: newVideoTitle, admin_id: u.user.id }]).select();
+    if (error) return alert('Error: ' + error.message);
+    if (data) {
+      setProjects([data[0], ...projects]);
+      setNewClientName('');
+      setNewVideoTitle('');
+      setJustCreatedClient(data[0]);
+    }
+  };
+
+  const handleCreateEditor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEditorName.trim() || !newEditorId.trim()) return alert('Fill all fields');
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) return;
+    const { data, error } = await supabase.from('child_editors').insert([{ name: newEditorName, custom_id: newEditorId, admin_id: u.user.id }]).select();
+    if (error) return alert('Error: ' + error.message);
+    if (data) {
+      setChildEditors([data[0], ...childEditors]);
+      setNewEditorName('');
+      setNewEditorId('');
+      setJustCreatedEditor(data[0]);
+    }
+  };
+
+  const assignEditor = async (projectId: string, editorId: string) => {
+    const val = editorId === 'none' ? null : editorId;
+    setProjects(projects.map(p => p.id === projectId ? { ...p, assigned_editor_id: val } : p));
+    await supabase.from('projects').update({ assigned_editor_id: val }).eq('id', projectId);
+  };
+
+  const broadcastToRoom = async (projectId: string, payload: any) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && activeChatProjectId === projectId) {
+      wsRef.current.send(JSON.stringify(payload));
+    } else {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const httpUrl = WS_URL.replace(/^ws(s)?/, 'http$1') + `/chat/${projectId}/broadcast`;
+        await fetch(httpUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token}`
+          },
+          body: JSON.stringify(payload)
+        });
+      } catch (err) {
+        console.error('Broadcast fallback failed', err);
+        // Fallback to direct DB update if the worker fails
+        if (payload.type === 'progress') supabase.from('projects').update({ progress: payload.value }).eq('id', projectId);
+        if (payload.type === 'delivery') supabase.from('projects').update({ delivery_link: payload.link }).eq('id', projectId);
+        if (payload.type === 'authority_update') supabase.from('projects').update({ editor_can_chat: payload.editor_can_chat, editor_can_deliver: payload.editor_can_deliver }).eq('id', projectId);
+      }
+    }
+  };
+
+  const confirmAuth = async (id: string) => {
+    const p = projects.find(x => x.id === id);
+    if (!p) return;
+    const authState = localAuth[id];
+    if (!authState) return;
+
+    const chat = authState.chat !== undefined ? authState.chat : p.editor_can_chat;
+    const deliver = authState.deliver !== undefined ? authState.deliver : p.editor_can_deliver;
+
+    const updated = { ...p, editor_can_chat: chat, editor_can_deliver: deliver };
+    setProjects(projects.map(proj => proj.id === id ? updated : proj));
+
+    const newLocal = { ...localAuth };
+    delete newLocal[id];
+    setLocalAuth(newLocal);
+
+    await broadcastToRoom(id, {
+      type: 'authority_update',
+      project_id: id,
+      editor_can_chat: chat,
+      editor_can_deliver: deliver
+    });
+  };
+
+  const finalizeLink = async (projectId: string, link: string) => {
+    setProjects(projects.map(p => p.id === projectId ? { ...p, delivery_link: link, editor_proposed_link: null } : p));
+    // Finalizing a link sets it as delivered and clears the proposal in the DB.
+    // The worker handles updating both in handleDeliveryUpdate if we send a delivery. 
+    // BUT we also need to clear editor_proposed_link in Supabase manually if the worker doesn't do it.
+    await supabase.from('projects').update({ delivery_link: link, editor_proposed_link: null }).eq('id', projectId);
+    
+    await broadcastToRoom(projectId, { type: 'delivery', project_id: projectId, link });
+  };
+
+  const handleLocalProgressChange = (id: string, v: number) => {
+    setLocalProgress({ ...localProgress, [id]: v });
+  };
+
+  const confirmProgress = async (id: string) => {
+    const v = localProgress[id];
+    if (v === undefined) return;
+    setProjects(projects.map(p => p.id === id ? { ...p, progress: v } : p));
+    
+    // Clear local override once confirmed
+    const newLocal = { ...localProgress };
+    delete newLocal[id];
+    setLocalProgress(newLocal);
+
+    await broadcastToRoom(id, { type: 'progress', project_id: id, value: v });
+  };
+
+  const updateDeliveryLink = (id: string, link: string) => {
+    setProjects(projects.map(p => p.id === id ? { ...p, delivery_link: link } : p));
+  };
+
+  const saveDeliveryLink = async (id: string) => {
+    const p = projects.find(x => x.id === id);
+    if (!p) return;
+    await broadcastToRoom(id, { type: 'delivery', project_id: id, link: p.delivery_link || '' });
+  };
+
+  const deleteProject = async (id: string) => {
+    if (!window.confirm('Delete this client dashboard?')) return;
+    setProjects(projects.filter(p => p.id !== id));
+    await supabase.from('projects').delete().eq('id', id);
+    if (activeChatProjectId === id) setActiveChatProjectId(null);
+  };
+
+  const deleteEditor = async (id: string) => {
+    if (!window.confirm('Delete this editor account?')) return;
+    setChildEditors(childEditors.filter(e => e.id !== id));
+    await supabase.from('child_editors').delete().eq('id', id);
+  };
+
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !activeChatProjectId) return;
+    const msgText = chatInput.trim();
+    setChatInput('');
+    
+    const p = projects.find(x => x.id === activeChatProjectId);
+    // If editor_can_chat is true, target_role is 'all'
+    const target = p?.editor_can_chat ? 'all' : chatTarget;
+
+    setChatMessages(prev => [...prev, {
+      id: Date.now(),
+      project_id: activeChatProjectId,
+      sender_role: 'admin',
+      target_role: target,
+      message_text: msgText,
+      created_at: new Date().toISOString(),
+    }]);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'chat',
+        project_id: activeChatProjectId,
+        sender_role: 'admin',
+        target_role: target,
+        message_text: msgText,
+      }));
+    }
+  };
+
+  const copyLink = (type: 'client'|'editor', id: string) => {
+    const local = window.location.hostname.includes('localhost') || window.location.hostname.includes('127.0.0.1');
+    const link = local ? `http://localhost:3000/${type}/${id}?filepilot=true` : `https://filepilot.norehq.com/${type}/${id}`;
+    navigator.clipboard.writeText(link);
+    setCopiedId(`${type}-${id}`);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   return (
-    <div className="min-h-screen bg-parchment" style={{ cursor: 'auto', backgroundImage: circuitBg }}>
-      <div className="max-w-7xl mx-auto px-6 md:px-10 py-10">
-        {/* Header */}
-        <div className={`flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-10 transition-all duration-700 ease-out ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
-          <div>
-            <h1 className="font-heading text-4xl md:text-5xl font-black uppercase tracking-tighter text-noir leading-none">Your <span className="text-tarantino italic">Projects</span></h1>
-            <p className="text-noir/40 text-sm font-medium mt-2">Manage client dashboards, track progress, and communicate in real-time.</p>
+    <div className="min-h-screen bg-parchment font-sans" style={{ cursor: 'auto', backgroundImage: circuitBg }}>
+      <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
+        
+        {/* Header & Tabs */}
+        <div className={`mb-8 transition-all duration-700 ease-out ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <h1 className="font-heading text-3xl md:text-4xl font-black uppercase tracking-tighter text-noir leading-none">
+              Agency <span className="text-tarantino italic">Portal</span>
+            </h1>
+            <button onClick={async () => { await supabase.auth.signOut(); router.push('/portal/login'); }} className="text-xs font-bold uppercase tracking-widest text-noir/50 hover:text-tarantino transition-colors active:scale-95">
+              Sign Out
+            </button>
           </div>
-          <button onClick={() => setIsModalOpen(true)} className="bg-tarantino text-noir font-black uppercase text-xs tracking-[0.15em] px-8 py-4 hover:brightness-110 transition-all duration-300" style={{ cursor: 'pointer', clipPath: CPS, boxShadow: '0 0 15px rgba(255,79,0,0.25)' }}>+ Create Client Dashboard</button>
+          
+          <div className="flex gap-4 overflow-x-auto pb-2 border-b-2 border-noir/10">
+            {['workplace', 'create_client', 'create_editor', 'accounts'].map(tab => (
+              <button 
+                key={tab}
+                onClick={() => { setActiveTab(tab as any); setJustCreatedClient(null); setJustCreatedEditor(null); }}
+                className={`pb-2 px-1 font-bold uppercase tracking-widest text-xs md:text-sm whitespace-nowrap border-b-2 transition-all active:scale-95 ${activeTab === tab ? 'border-tarantino text-tarantino' : 'border-transparent text-noir/40 hover:text-noir'}`}
+              >
+                {tab.replace('_', ' ')}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Empty State */}
-        {projects.length === 0 && (
-          <CyberFrame className="max-w-md mx-auto">
-            <div className="flex flex-col items-center justify-center py-20 text-center px-8">
-              <div className="w-16 h-16 bg-noir flex items-center justify-center mb-6" style={{ clipPath: CPS, boxShadow: '0 0 20px rgba(255,79,0,0.2)' }}>
-                <svg className="w-8 h-8 text-tarantino" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" /></svg>
-              </div>
-              <h3 className="font-heading text-xl font-black uppercase tracking-tight text-noir mb-2">No Projects Yet</h3>
-              <p className="text-noir/40 text-sm font-medium">Create your first client dashboard to start tracking projects.</p>
-            </div>
-          </CyberFrame>
-        )}
+        {/* Tab Content */}
+        <div className={`transition-all duration-700 ease-out delay-100 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
+          
+          {/* WORKPLACE */}
+          {activeTab === 'workplace' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {projects.length === 0 ? (
+                <div className="lg:col-span-2 text-center py-16 text-noir/40 font-bold uppercase tracking-widest">No clients assigned to workplace yet.</div>
+              ) : (
+                projects.map((project) => {
+                  const currentProg = localProgress[project.id] !== undefined ? localProgress[project.id] : project.progress;
+                  const isProgChanged = localProgress[project.id] !== undefined && localProgress[project.id] !== project.progress;
+                  
+                  const authChat = localAuth[project.id]?.chat !== undefined ? localAuth[project.id]!.chat! : project.editor_can_chat;
+                  const authDeliver = localAuth[project.id]?.deliver !== undefined ? localAuth[project.id]!.deliver! : project.editor_can_deliver;
+                  const isAuthChanged = (localAuth[project.id]?.chat !== undefined && localAuth[project.id]!.chat !== project.editor_can_chat) || (localAuth[project.id]?.deliver !== undefined && localAuth[project.id]!.deliver !== project.editor_can_deliver);
 
-        {/* Project Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {projects.map((project, idx) => (
-            <CyberFrame key={project.id} className={`transition-all duration-500 ease-out ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
-              <div className="p-6 flex flex-col relative" style={{ transitionDelay: `${idx * 80}ms`, minHeight: '340px' }}>
-                {/* Corner accents */}
-                <div className="absolute top-2 left-2 w-4 h-4 border-t border-l border-tarantino/20" />
-                <div className="absolute top-2 right-2 w-4 h-4 border-t border-r border-tarantino/20" />
-                <div className="absolute bottom-2 left-2 w-4 h-4 border-b border-l border-tarantino/20" />
-                <div className="absolute bottom-2 right-2 w-4 h-4 border-b border-r border-tarantino/20" />
+                  return (
+                  <CyberFrame key={project.id} className="h-full">
+                    <div className="p-4 md:p-6 flex flex-col h-full relative">
+                      
+                      {/* Top bar: Client info + Editor Assignment */}
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <h2 className="text-xl md:text-2xl font-black text-noir tracking-tight leading-none mb-1">{project.client_name}</h2>
+                          <p className="text-sm font-bold uppercase tracking-widest text-tarantino">{project.video_title}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <select 
+                            value={project.assigned_editor_id || 'none'}
+                            onChange={(e) => assignEditor(project.id, e.target.value)}
+                            className="bg-transparent border border-noir/20 text-noir text-xs font-bold uppercase tracking-widest rounded-none px-2 py-1 outline-none focus:border-tarantino"
+                          >
+                            <option value="none">Unassigned</option>
+                            {childEditors.map(ed => (
+                              <option key={ed.id} value={ed.id}>{ed.name}</option>
+                            ))}
+                          </select>
+                          
+                          {project.assigned_editor_id && (
+                            <div className="flex flex-col items-end gap-1 mt-2 bg-noir/5 p-2 rounded-sm border border-noir/10">
+                              <label className="text-[10px] uppercase font-bold text-noir/70 flex items-center gap-2 cursor-pointer">
+                                <span>Authorize Chat</span>
+                                <input type="checkbox" checked={authChat} onChange={(e) => setLocalAuth({ ...localAuth, [project.id]: { ...localAuth[project.id], chat: e.target.checked } })} className="accent-tarantino" />
+                              </label>
+                              <label className="text-[10px] uppercase font-bold text-noir/70 flex items-center gap-2 cursor-pointer">
+                                <span>Authorize Deliver</span>
+                                <input type="checkbox" checked={authDeliver} onChange={(e) => setLocalAuth({ ...localAuth, [project.id]: { ...localAuth[project.id], deliver: e.target.checked } })} className="accent-tarantino" />
+                              </label>
+                              {isAuthChanged && (
+                                <button onClick={() => confirmAuth(project.id)} className="bg-tarantino text-white px-2 py-1 mt-1 text-[10px] font-bold uppercase tracking-widest hover:bg-noir active:scale-95 transition-all">
+                                  Confirm Auth
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
 
-                {/* Title */}
-                <div className="mb-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h3 className="font-heading text-lg font-black uppercase tracking-tight text-noir leading-tight">{project.video_title}</h3>
-                      <p className="text-[10px] uppercase tracking-[0.25em] font-bold text-noir/30 mt-1">{project.client_name}</p>
+                      {/* Progress Bar */}
+                      <div className="mb-6">
+                        <div className="flex justify-between items-end mb-2">
+                          <span className="text-xs font-bold uppercase tracking-widest text-noir/50">Progress</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg font-black text-noir">{currentProg}%</span>
+                            {isProgChanged && (
+                              <button onClick={() => confirmProgress(project.id)} className="ml-2 bg-tarantino text-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-noir active:scale-95 transition-all">
+                                Confirm
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <input type="range" min="0" max="100" value={currentProg} onChange={(e) => handleLocalProgressChange(project.id, parseInt(e.target.value))} className="w-full h-2 bg-noir/10 rounded-none appearance-none cursor-ew-resize accent-tarantino" />
+                      </div>
+
+                      {/* Delivery Link Section */}
+                      <div className="mb-6 p-4 bg-noir/5 border border-noir/10">
+                        <span className="text-xs font-bold uppercase tracking-widest text-noir/50 block mb-2">Final Delivery Link</span>
+                        <div className="flex gap-2">
+                          <input type="text" value={project.delivery_link || ''} onChange={(e) => updateDeliveryLink(project.id, e.target.value)} placeholder="https://..." className="flex-1 bg-white/50 border border-noir/20 px-2 py-1 text-xs font-medium text-noir outline-none focus:border-tarantino transition-colors" />
+                          <button onClick={() => saveDeliveryLink(project.id)} className="bg-noir text-parchment px-3 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:-translate-y-0.5 active:scale-95 transition-all" style={{ clipPath: CPS }}>Save</button>
+                        </div>
+                        
+                        {/* Editor Proposed Link */}
+                        {project.editor_proposed_link && !project.editor_can_deliver && (
+                          <div className="mt-4 p-3 border border-tarantino/30 bg-tarantino/5 flex flex-col gap-2">
+                            <span className="text-[10px] font-bold uppercase text-tarantino tracking-widest">Editor Proposed Link</span>
+                            <a href={project.editor_proposed_link} target="_blank" className="text-xs text-noir underline break-all">{project.editor_proposed_link}</a>
+                            <button onClick={() => finalizeLink(project.id, project.editor_proposed_link!)} className="bg-tarantino text-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-noir hover:-translate-y-0.5 active:scale-95 transition-all self-start">Finalize & Send to Client</button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Chat / Open Workspace Button */}
+                      <div className="mt-auto">
+                        {activeChatProjectId === project.id ? (
+                          <button onClick={() => setActiveChatProjectId(null)} className="w-full bg-noir text-parchment py-2 text-xs font-bold uppercase tracking-widest hover:bg-tarantino hover:-translate-y-0.5 active:scale-95 transition-all flex justify-center items-center gap-2" style={{ clipPath: CPS }}>Close Workspace Chat</button>
+                        ) : (
+                          <button onClick={() => setActiveChatProjectId(project.id)} className="w-full bg-parchment border-2 border-noir text-noir py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir hover:text-parchment hover:-translate-y-0.5 active:scale-95 transition-all flex justify-center items-center gap-2" style={{ clipPath: CPS }}>Open Workspace Chat</button>
+                        )}
+                      </div>
+
+                      {/* Chat Panel (when active) */}
+                      {activeChatProjectId === project.id && (
+                        <div className="mt-4 border-2 border-noir flex flex-col h-80 bg-white">
+                          
+                          {/* Chat Header / Target Selector */}
+                          <div className="flex border-b-2 border-noir">
+                            {project.editor_can_chat ? (
+                              <div className="flex-1 p-2 bg-noir/5 text-center text-xs font-bold uppercase tracking-widest text-noir">Unified Group Chat (Admin, Client, Editor)</div>
+                            ) : (
+                              <>
+                                <button onClick={() => setChatTarget('client')} className={`flex-1 p-2 text-xs font-bold uppercase tracking-widest transition-colors ${chatTarget === 'client' ? 'bg-noir text-white' : 'bg-white text-noir hover:bg-noir/5'}`}>Client Chat</button>
+                                {project.assigned_editor_id && (
+                                  <button onClick={() => setChatTarget('editor')} className={`flex-1 p-2 border-l-2 border-noir text-xs font-bold uppercase tracking-widest transition-colors ${chatTarget === 'editor' ? 'bg-tarantino text-white' : 'bg-white text-noir hover:bg-noir/5'}`}>Editor Chat</button>
+                                )}
+                              </>
+                            )}
+                          </div>
+
+                          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+                            {chatMessages.length === 0 && <div className="text-center text-noir/40 text-xs font-bold uppercase tracking-widest my-auto">No messages yet.</div>}
+                            {chatMessages.filter(m => project.editor_can_chat || m.target_role === chatTarget || m.target_role === 'all' || (m.sender_role === chatTarget)).map((msg) => {
+                              const isAdmin = msg.sender_role === 'admin';
+                              return (
+                                <div key={msg.id} className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}>
+                                  <span className="text-[9px] uppercase tracking-widest text-noir/40 font-bold mb-1">{msg.sender_role}</span>
+                                  <div className={`px-4 py-2 text-sm max-w-[85%] ${isAdmin ? 'bg-noir text-parchment' : 'bg-parchment border border-noir/10 text-noir'}`} style={{ clipPath: CPS }}>
+                                    {msg.message_text}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            <div ref={chatEndRef} />
+                          </div>
+
+                          <form onSubmit={sendMessage} className="p-2 border-t-2 border-noir flex gap-2 bg-parchment">
+                            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder={`Message ${project.editor_can_chat ? 'everyone' : chatTarget}...`} className="flex-1 bg-transparent border-none outline-none text-sm px-2 font-medium" />
+                            <button type="submit" disabled={!wsConnected} className="bg-tarantino text-white px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>Send</button>
+                          </form>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[9px] uppercase tracking-[0.15em] font-bold px-2 py-1 whitespace-nowrap ${project.progress === 100 ? 'bg-green-500/10 text-green-600 border border-green-500/20' : project.progress > 0 ? 'bg-tarantino/10 text-tarantino border border-tarantino/20' : 'bg-noir/[0.03] text-noir/30 border border-noir/[0.06]'}`} style={{ clipPath: CPS }}>{project.progress === 100 ? 'Delivered' : project.progress > 0 ? 'In Progress' : 'Not Started'}</span>
-                      <button onClick={() => deleteProject(project.id)} className="text-red-500/40 hover:text-red-500 transition-colors" style={{ cursor: 'pointer' }} title="Delete Dashboard">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </CyberFrame>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {/* CREATE CLIENT */}
+          {activeTab === 'create_client' && (
+            <div className="max-w-md">
+              <CyberFrame>
+                {justCreatedClient ? (
+                  <div className="p-6 md:p-8 flex flex-col gap-6 text-center">
+                    <div className="text-4xl text-green-500 mb-2">✓</div>
+                    <h2 className="text-xl md:text-2xl font-black text-noir tracking-tight">Dashboard Created!</h2>
+                    <p className="text-xs font-bold uppercase tracking-widest text-noir/70">Copy this link and give to your client to access their dashboard.</p>
+                    
+                    <div className="bg-noir/5 p-4 border border-noir/10 flex flex-col gap-2">
+                      <code className="text-xs text-noir break-all">
+                        https://filepilot.norehq.com/client/{justCreatedClient.id}
+                      </code>
+                      <button onClick={() => copyLink('client', justCreatedClient.id)} className="bg-tarantino text-white py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir hover:-translate-y-0.5 active:scale-95 transition-all">
+                        {copiedId === `client-${justCreatedClient.id}` ? 'Copied!' : 'Copy Link'}
                       </button>
                     </div>
-                  </div>
-                </div>
 
-                {/* Progress */}
-                <div className="mb-4">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-[10px] uppercase tracking-[0.25em] font-bold text-noir/40">Progress</span>
-                    <span className="text-sm font-black text-tarantino">{project.progress}%</span>
-                  </div>
-                  <div className="relative h-2 w-full overflow-hidden" style={{ background: 'rgba(26,26,26,0.06)', clipPath: CPS }}>
-                    <div className="absolute top-0 left-0 h-full bg-tarantino transition-all duration-500 ease-out" style={{ width: `${project.progress}%`, boxShadow: '0 0 8px rgba(255,79,0,0.5), 0 0 16px rgba(255,79,0,0.2)' }} />
-                  </div>
-                  <input type="range" min="0" max="100" value={project.progress} onChange={(e) => updateProgress(project.id, parseInt(e.target.value))} className="w-full mt-2 accent-tarantino h-1 opacity-60 hover:opacity-100 transition-opacity" style={{ cursor: 'pointer' }} />
-                </div>
-
-                {/* Delivery URL */}
-                <div className="mb-4">
-                  <label className="text-[10px] uppercase tracking-[0.25em] font-bold text-noir/40 block mb-2">Delivery URL</label>
-                  <input type="url" value={project.delivery_link || ''} onChange={(e) => updateDeliveryLink(project.id, e.target.value)} placeholder="https://drive.google.com/..." className="w-full text-sm bg-noir/[0.03] text-noir px-4 py-2.5 font-medium placeholder:text-noir/20 focus:outline-none transition-colors duration-300" style={{ cursor: 'text', border: '1px solid rgba(26,26,26,0.06)', clipPath: CPS }} />
-                </div>
-
-                {/* Actions */}
-                <div className="mt-auto pt-4 flex justify-between items-center flex-wrap gap-2" style={{ borderTop: '1px solid rgba(255,79,0,0.1)' }}>
-                  <button onClick={() => saveProjectUpdates(project.id)} disabled={savingId === project.id} className="text-[10px] uppercase tracking-[0.15em] font-bold bg-tarantino text-noir px-4 py-2 hover:brightness-110 transition-all disabled:opacity-50" style={{ cursor: 'pointer', clipPath: CPS, boxShadow: '0 0 8px rgba(255,79,0,0.2)' }}>{savingId === project.id ? 'Saving...' : 'Confirm'}</button>
-                  <div className="flex gap-2">
-                    <button onClick={() => copyClientLink(project.id)} className="text-[10px] uppercase tracking-[0.15em] font-bold text-tarantino/70 hover:text-tarantino transition-colors flex items-center gap-1" style={{ cursor: 'pointer' }}>
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.688a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L4.343 8.55" /></svg>
-                      {copiedId === project.id ? 'Copied!' : 'Link'}
-                    </button>
-                    <button onClick={() => setActiveChatProjectId(project.id)} className="text-[10px] uppercase tracking-[0.15em] font-bold text-noir/40 hover:text-noir px-3 py-1.5 hover:border-noir/20 transition-all flex items-center gap-1" style={{ cursor: 'pointer', border: '1px solid rgba(26,26,26,0.08)', clipPath: CPS }}>
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" /></svg>
-                      Chat
+                    <button onClick={() => setJustCreatedClient(null)} className="mt-4 text-xs font-bold uppercase tracking-widest text-noir/50 hover:text-noir active:scale-95 transition-all">
+                      Create Another
                     </button>
                   </div>
-                </div>
-              </div>
-            </CyberFrame>
-          ))}
-        </div>
+                ) : (
+                  <form onSubmit={handleCreateClient} className="p-6 md:p-8 flex flex-col gap-6">
+                    <h2 className="text-xl md:text-2xl font-black text-noir tracking-tight">Create Client Dashboard</h2>
+                    <div>
+                      <label className="block text-[10px] md:text-xs font-bold uppercase tracking-widest text-noir/70 mb-2">Client Name</label>
+                      <input type="text" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} className="w-full bg-transparent border-b-2 border-noir/20 py-2 text-lg md:text-xl font-bold text-noir outline-none focus:border-tarantino transition-colors placeholder:text-noir/20" placeholder="e.g. Nike" required />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] md:text-xs font-bold uppercase tracking-widest text-noir/70 mb-2">Video Title</label>
+                      <input type="text" value={newVideoTitle} onChange={(e) => setNewVideoTitle(e.target.value)} className="w-full bg-transparent border-b-2 border-noir/20 py-2 text-lg md:text-xl font-bold text-noir outline-none focus:border-tarantino transition-colors placeholder:text-noir/20" placeholder="e.g. Summer Campaign" required />
+                    </div>
+                    <button type="submit" className="mt-4 bg-tarantino text-white py-3 font-bold uppercase tracking-widest hover:bg-noir hover:-translate-y-0.5 active:scale-95 transition-all" style={{ clipPath: CPS }}>Create Dashboard</button>
+                  </form>
+                )}
+              </CyberFrame>
+            </div>
+          )}
 
-        {/* Create Modal */}
-        {isModalOpen && (
-          <div className="fixed inset-0 bg-noir/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" style={{ cursor: 'auto' }}>
-            <CyberFrame className="w-full max-w-lg">
-              <div className="p-8 relative">
-                <div className="absolute top-3 left-3 w-5 h-5 border-t border-l border-tarantino/25" />
-                <div className="absolute top-3 right-3 w-5 h-5 border-t border-r border-tarantino/25" />
-                <h2 className="font-heading text-2xl font-black uppercase tracking-tight text-noir mb-1">New <span className="text-tarantino italic">Project</span></h2>
-                <p className="text-noir/40 text-sm font-medium mb-8">Create a new client dashboard. A unique shareable link will be generated.</p>
-                <form onSubmit={handleCreateProject} className="space-y-5">
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-[0.3em] font-bold text-noir/50 mb-2">Client Name</label>
-                    <input required type="text" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} className="w-full bg-white/80 text-noir px-5 py-3.5 text-sm font-medium placeholder:text-noir/25 focus:outline-none transition-colors duration-300" style={{ cursor: 'text', border: '1px solid rgba(26,26,26,0.08)', clipPath: CPS }} placeholder="e.g. Acme Corp" />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-[0.3em] font-bold text-noir/50 mb-2">Video Title</label>
-                    <input required type="text" value={newVideoTitle} onChange={(e) => setNewVideoTitle(e.target.value)} className="w-full bg-white/80 text-noir px-5 py-3.5 text-sm font-medium placeholder:text-noir/25 focus:outline-none transition-colors duration-300" style={{ cursor: 'text', border: '1px solid rgba(26,26,26,0.08)', clipPath: CPS }} placeholder="e.g. Q3 Brand Film" />
-                  </div>
-                  <div className="flex justify-end gap-3 pt-4">
-                    <button type="button" onClick={() => setIsModalOpen(false)} className="text-[10px] uppercase tracking-[0.2em] font-bold text-noir/40 hover:text-noir px-6 py-3 transition-colors" style={{ cursor: 'pointer' }}>Cancel</button>
-                    <button type="submit" className="bg-tarantino text-noir font-black uppercase text-xs tracking-[0.15em] px-8 py-3 hover:brightness-110 transition-all duration-300" style={{ cursor: 'pointer', clipPath: CPS, boxShadow: '0 0 12px rgba(255,79,0,0.25)' }}>Create Dashboard</button>
-                  </div>
-                </form>
-              </div>
-            </CyberFrame>
-          </div>
-        )}
+          {/* CREATE EDITOR */}
+          {activeTab === 'create_editor' && (
+            <div className="max-w-md">
+              <CyberFrame>
+                {justCreatedEditor ? (
+                  <div className="p-6 md:p-8 flex flex-col gap-6 text-center">
+                    <div className="text-4xl text-green-500 mb-2">✓</div>
+                    <h2 className="text-xl md:text-2xl font-black text-noir tracking-tight">Editor Account Created!</h2>
+                    <p className="text-xs font-bold uppercase tracking-widest text-noir/70">Copy this link and give to your editor to access their dashboard.</p>
+                    
+                    <div className="bg-noir/5 p-4 border border-noir/10 flex flex-col gap-2">
+                      <code className="text-xs text-noir break-all">
+                        https://filepilot.norehq.com/editor/{justCreatedEditor.custom_id}
+                      </code>
+                      <button onClick={() => copyLink('editor', justCreatedEditor.custom_id)} className="bg-noir text-parchment py-2 text-xs font-bold uppercase tracking-widest hover:bg-tarantino hover:-translate-y-0.5 active:scale-95 transition-all">
+                        {copiedId === `editor-${justCreatedEditor.custom_id}` ? 'Copied!' : 'Copy Link'}
+                      </button>
+                    </div>
 
-        {/* Chat Tray */}
-        {activeChatProjectId && (
-          <div className="fixed bottom-0 right-0 md:right-10 w-full md:w-[380px] px-4 md:px-0 z-40" style={{ cursor: 'auto' }}>
-            <CyberFrame dark>
-              <div className="flex flex-col" style={{ height: '440px' }}>
-                <div className="px-5 py-4 flex justify-between items-center shrink-0" style={{ borderBottom: '1px solid rgba(255,79,0,0.15)' }}>
-                  <div><span className="font-heading text-sm font-black uppercase tracking-tight text-parchment">Project Chat</span><span className="text-[9px] uppercase tracking-[0.2em] font-bold text-tarantino/60 ml-2">Live</span></div>
-                  <button onClick={() => setActiveChatProjectId(null)} className="text-parchment/30 hover:text-parchment transition-colors" style={{ cursor: 'pointer' }}><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg></button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {chatMessages.length === 0 && <div className="flex items-center justify-center h-full"><p className="text-[10px] uppercase tracking-[0.2em] font-bold text-parchment/20 text-center">No messages yet.<br />Start the conversation.</p></div>}
-                  {chatMessages.map((msg) => (
-                    <div key={msg.id} className={`flex ${msg.sender_role === 'editor' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] px-4 py-2.5 text-sm font-medium ${msg.sender_role === 'editor' ? 'text-parchment' : 'text-parchment/70'}`} style={{ background: msg.sender_role === 'editor' ? 'rgba(255,79,0,0.12)' : 'rgba(241,239,231,0.06)', border: `1px solid ${msg.sender_role === 'editor' ? 'rgba(255,79,0,0.25)' : 'rgba(241,239,231,0.1)'}`, clipPath: CPS }}>
-                        <p>{msg.message_text}</p>
-                        <span className="text-[9px] uppercase tracking-wider text-parchment/20 mt-1 block">{msg.sender_role === 'editor' ? 'You' : 'Client'} · {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    <button onClick={() => setJustCreatedEditor(null)} className="mt-4 text-xs font-bold uppercase tracking-widest text-noir/50 hover:text-noir active:scale-95 transition-all">
+                      Create Another
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleCreateEditor} className="p-6 md:p-8 flex flex-col gap-6">
+                    <h2 className="text-xl md:text-2xl font-black text-noir tracking-tight">Create Editor Account</h2>
+                    <div>
+                      <label className="block text-[10px] md:text-xs font-bold uppercase tracking-widest text-noir/70 mb-2">Editor Name</label>
+                      <input type="text" value={newEditorName} onChange={(e) => setNewEditorName(e.target.value)} className="w-full bg-transparent border-b-2 border-noir/20 py-2 text-lg md:text-xl font-bold text-noir outline-none focus:border-tarantino transition-colors placeholder:text-noir/20" placeholder="e.g. Alex" required />
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-end mb-2">
+                        <label className="block text-[10px] md:text-xs font-bold uppercase tracking-widest text-noir/70">Custom ID</label>
+                        <button type="button" onClick={() => setNewEditorId('ed_' + Math.random().toString(36).substring(2, 8))} className="text-[10px] text-tarantino font-bold uppercase tracking-widest active:scale-95 hover:opacity-80">Generate</button>
+                      </div>
+                      <input type="text" value={newEditorId} onChange={(e) => setNewEditorId(e.target.value.replace(/\s+/g, '-').toLowerCase())} className="w-full bg-transparent border-b-2 border-noir/20 py-2 text-lg md:text-xl font-bold text-noir outline-none focus:border-tarantino transition-colors placeholder:text-noir/20" placeholder="e.g. alex-cuts" required />
+                      <p className="text-[10px] text-noir/40 mt-1">They will login via: filepilot.norehq.com/editor/{newEditorId || '[id]'}</p>
+                    </div>
+                    <button type="submit" className="mt-4 bg-noir text-parchment py-3 font-bold uppercase tracking-widest hover:bg-tarantino hover:-translate-y-0.5 active:scale-95 transition-all" style={{ clipPath: CPS }}>Create Editor</button>
+                  </form>
+                )}
+              </CyberFrame>
+            </div>
+          )}
+
+          {/* ACCOUNTS */}
+          {activeTab === 'accounts' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              
+              {/* Clients */}
+              <div>
+                <h3 className="font-heading text-2xl font-black uppercase tracking-tighter text-noir mb-6 border-b-2 border-noir/10 pb-2">Client Accounts</h3>
+                <div className="flex flex-col gap-4">
+                  {projects.map(p => (
+                    <div key={p.id} className="p-4 border-2 border-noir/10 flex justify-between items-center hover:border-noir transition-colors bg-white/50">
+                      <div>
+                        <div className="font-bold text-noir">{p.client_name}</div>
+                        <div className="text-xs font-bold uppercase tracking-widest text-tarantino">{p.video_title}</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => copyLink('client', p.id)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-noir active:scale-95 transition-transform">{copiedId === `client-${p.id}` ? 'Copied!' : 'Copy Link'}</button>
+                        <button onClick={() => deleteProject(p.id)} className="text-[10px] font-bold uppercase tracking-widest text-red-500 hover:text-red-700 active:scale-95 transition-transform">Delete</button>
                       </div>
                     </div>
                   ))}
-                  <div ref={chatEndRef} />
+                  {projects.length === 0 && <div className="text-sm font-medium text-noir/40">No clients yet.</div>}
                 </div>
-                <form onSubmit={sendMessage} className="p-4 flex gap-2 shrink-0" style={{ borderTop: '1px solid rgba(255,79,0,0.12)' }}>
-                  <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." className="flex-1 bg-parchment/[0.04] text-parchment text-sm px-4 py-2.5 font-medium placeholder:text-parchment/20 focus:outline-none transition-colors" style={{ cursor: 'text', border: '1px solid rgba(241,239,231,0.1)', clipPath: CPS }} />
-                  <button type="submit" className="bg-tarantino text-noir p-2.5 hover:brightness-110 transition-colors" style={{ cursor: 'pointer', clipPath: CPS, boxShadow: '0 0 8px rgba(255,79,0,0.3)' }}><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg></button>
-                </form>
               </div>
-            </CyberFrame>
-          </div>
-        )}
+
+              {/* Editors */}
+              <div>
+                <h3 className="font-heading text-xl md:text-2xl font-black uppercase tracking-tighter text-noir mb-6 border-b-2 border-noir/10 pb-2">Editor Accounts</h3>
+                <div className="flex flex-col gap-4">
+                  {childEditors.map(e => (
+                    <div key={e.id} className="p-4 border-2 border-noir/10 flex justify-between items-center hover:border-noir transition-colors bg-white/50">
+                      <div>
+                        <div className="font-bold text-noir">{e.name}</div>
+                        <div className="text-xs font-bold uppercase tracking-widest text-noir/50">ID: {e.custom_id}</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => copyLink('editor', e.custom_id)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-noir active:scale-95 transition-transform">{copiedId === `editor-${e.custom_id}` ? 'Copied!' : 'Copy Link'}</button>
+                        <button onClick={() => deleteEditor(e.id)} className="text-[10px] font-bold uppercase tracking-widest text-red-500 hover:text-red-700 active:scale-95 transition-transform">Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                  {childEditors.length === 0 && <div className="text-sm font-medium text-noir/40">No child editors yet.</div>}
+                </div>
+              </div>
+
+            </div>
+          )}
+
+        </div>
       </div>
     </div>
   );

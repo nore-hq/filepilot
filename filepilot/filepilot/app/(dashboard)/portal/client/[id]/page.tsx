@@ -8,8 +8,8 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-type Project = { id: string; client_name: string; video_title: string; progress: number; delivery_link: string | null; };
-type Message = { id: number; project_id: string; sender_role: 'editor' | 'client'; message_text: string; created_at: string; };
+type Project = { id: string; client_name: string; video_title: string; progress: number; delivery_link: string | null; editor_can_chat: boolean; };
+type Message = { id: number; project_id: string; sender_role: 'admin' | 'editor' | 'client'; target_role: string; message_text: string; created_at: string; };
 
 /* ─── Cyberpunk beveled frame ─── */
 const CP = 'polygon(0 14px, 14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px), calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px))';
@@ -29,6 +29,8 @@ const circuitSvg = `url("data:image/svg+xml,%3Csvg width='400' height='400' xmln
 
 const darkCircuitSvg = `url("data:image/svg+xml,%3Csvg width='300' height='300' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0,60 L70,60 L70,40 L130,40 L130,60 L300,60' stroke='rgba(255,79,0,0.12)' fill='none' stroke-width='0.6'/%3E%3Cpath d='M0,160 L50,160 L50,140 L110,140 L110,160 L200,160 L200,180 L300,180' stroke='rgba(255,79,0,0.12)' fill='none' stroke-width='0.6'/%3E%3Cpath d='M0,260 L90,260 L90,240 L160,240 L160,260 L300,260' stroke='rgba(255,79,0,0.12)' fill='none' stroke-width='0.6'/%3E%3Cpath d='M70,0 L70,40' stroke='rgba(255,79,0,0.1)' fill='none' stroke-width='0.6'/%3E%3Cpath d='M200,0 L200,60 L200,160' stroke='rgba(255,79,0,0.1)' fill='none' stroke-width='0.6'/%3E%3Ccircle cx='70' cy='60' r='2' fill='rgba(255,79,0,0.15)'/%3E%3Ccircle cx='130' cy='40' r='2' fill='rgba(255,79,0,0.15)'/%3E%3Ccircle cx='110' cy='140' r='2' fill='rgba(255,79,0,0.15)'/%3E%3Ccircle cx='200' cy='160' r='2' fill='rgba(255,79,0,0.15)'/%3E%3Ccircle cx='90' cy='260' r='2' fill='rgba(255,79,0,0.15)'/%3E%3C/svg%3E")`;
 
+const WS_URL = process.env.NEXT_PUBLIC_REALTIME_URL || 'wss://nore-realtime-engine.norehq01.workers.dev';
+
 export default function ClientDashboard({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
   const [project, setProject] = useState<Project | null>(null);
@@ -39,19 +41,24 @@ export default function ClientDashboard({ params }: { params: Promise<{ id: stri
   const [projectId, setProjectId] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => { params.then((p) => setProjectId(p.id)); }, [params]);
 
+  // ─── WebSocket Connection with Auto-Reconnect ───
   useEffect(() => {
     if (!projectId) return;
     setMounted(true);
     fetchProject();
     fetchMessages();
-    const projectChannel = supabase.channel(`project-${projectId}`).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'projects', filter: `id=eq.${projectId}` }, (payload) => setProject(payload.new as Project)).subscribe();
-    
+
+    let isCancelled = false;
+
     const connectWs = async () => {
+      // Get or create a session (anonymous sign-in for clients)
       let { data: { session } } = await supabase.auth.getSession();
-      
+
       if (!session) {
         const { data: anonData, error } = await supabase.auth.signInAnonymously();
         if (error) {
@@ -60,40 +67,114 @@ export default function ClientDashboard({ params }: { params: Promise<{ id: stri
         }
         session = anonData.session;
       }
-      
-      if (!session) return;
 
-      const WS_URL = process.env.NEXT_PUBLIC_REALTIME_URL || 'ws://localhost:8787';
-      const ws = new WebSocket(`${WS_URL}/chat/${projectId}?token=${session.access_token}`);
+      if (!session || isCancelled) return;
+
+      const ws = new WebSocket(`${WS_URL}/chat/${projectId}?token=${session.access_token}&role=client`);
       wsRef.current = ws;
 
+      ws.onopen = () => {
+        console.log('[WS] Client connected to Cloudflare Worker');
+        reconnectAttemptRef.current = 0;
+      };
+
       ws.onmessage = (event) => {
-        const payload = JSON.parse(event.data);
-        if (payload.type === 'message') {
-          setMessages((prev) => [...prev, {
-            id: Date.now(),
-            project_id: projectId,
-            sender_role: payload.sender_role,
-            message_text: payload.content,
-            created_at: payload.timestamp
-          } as Message]);
+        try {
+          const payload = JSON.parse(event.data);
+          switch (payload.type) {
+            case 'chat':
+              setMessages((prev) => [...prev, {
+                id: Date.now(),
+                project_id: projectId,
+                sender_role: payload.sender_role,
+                target_role: payload.target_role,
+                message_text: payload.message_text,
+                created_at: payload.timestamp || new Date().toISOString(),
+              }]);
+              break;
+            case 'progress':
+              setProject((prev) => prev ? { ...prev, progress: payload.value } : prev);
+              break;
+            case 'delivery':
+              setProject((prev) => prev ? { ...prev, delivery_link: payload.link } : prev);
+              break;
+            case 'authority_update':
+              setProject((prev) => prev ? { ...prev, editor_can_chat: payload.editor_can_chat, editor_can_deliver: payload.editor_can_deliver } : prev);
+              break;
+          }
+        } catch (err) {
+          console.error('[WS] Failed to parse message:', err);
         }
+      };
+
+      ws.onclose = () => {
+        if (isCancelled) return;
+        // Auto-reconnect with exponential backoff (max 30s)
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 30000);
+        console.log(`[WS] Disconnected. Reconnecting in ${delay}ms...`);
+        reconnectAttemptRef.current++;
+        reconnectTimerRef.current = setTimeout(connectWs, delay);
+      };
+
+      ws.onerror = (err) => {
+        console.error('[WS] Error:', err);
+        ws.close();
       };
     };
 
     connectWs();
 
-    return () => { 
-      supabase.removeChannel(projectChannel); 
+    return () => {
+      isCancelled = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) wsRef.current.close();
+      wsRef.current = null;
     };
   }, [projectId]);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  const fetchProject = async () => { setLoading(true); const { data } = await supabase.from('projects').select('*').eq('id', projectId).single(); if (data) setProject(data); setLoading(false); };
-  const fetchMessages = async () => { const { data } = await supabase.from('messages').select('*').eq('project_id', projectId).order('created_at', { ascending: true }); if (data) setMessages(data); };
-  const sendMessage = async (e: React.FormEvent) => { e.preventDefault(); if (!chatInput.trim()) return; const newMsg = { project_id: projectId, sender_role: 'client' as const, message_text: chatInput.trim() }; if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify(newMsg)); setMessages(prev => [...prev, { ...newMsg, id: Date.now(), created_at: new Date().toISOString() }]); } setChatInput(''); };
+  // ─── Supabase: Initial Data Fetch ───
+  const fetchProject = async () => {
+    setLoading(true);
+    const { data } = await supabase.from('projects').select('*').eq('id', projectId).single();
+    if (data) setProject(data);
+    setLoading(false);
+  };
+
+  const fetchMessages = async () => {
+    const { data } = await supabase.from('messages').select('*').eq('project_id', projectId).order('created_at', { ascending: true });
+    if (data) setMessages(data);
+  };
+
+  // ─── WebSocket: Send chat message via Cloudflare ───
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+    const msgText = chatInput.trim();
+    setChatInput('');
+
+    // Optimistically add to local state
+    setMessages(prev => [...prev, {
+      id: Date.now(),
+      project_id: projectId,
+      sender_role: 'client' as const,
+      target_role: 'admin',
+      message_text: msgText,
+      created_at: new Date().toISOString(),
+    }]);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'chat',
+        project_id: projectId,
+        sender_role: 'client',
+        target_role: 'admin',
+        message_text: msgText,
+      }));
+    }
+  };
+
   const manualSync = () => { router.refresh(); fetchProject(); fetchMessages(); };
 
   if (loading) return (
@@ -135,8 +216,8 @@ export default function ClientDashboard({ params }: { params: Promise<{ id: stri
         {/* ─── Welcome ─── */}
         <div className={`mb-10 transition-all duration-700 ease-out ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
           <p className="text-[10px] uppercase tracking-[0.35em] font-bold text-tarantino mb-2">Your Workspace</p>
-          <h1 className="font-heading text-4xl md:text-5xl font-black uppercase tracking-tighter text-noir leading-none">Welcome, <span className="text-tarantino italic">{project.client_name}</span></h1>
-          <p className="text-noir/40 text-sm font-medium mt-3">Project: {project.video_title}</p>
+          <h1 className="text-3xl md:text-5xl font-black uppercase text-noir tracking-tighter leading-none">{project.client_name}</h1>
+          <p className="text-sm md:text-lg font-bold text-tarantino uppercase tracking-widest mt-2">{project.video_title}</p>
         </div>
 
         {/* ─── Bento Grid ─── */}
@@ -230,12 +311,12 @@ export default function ClientDashboard({ params }: { params: Promise<{ id: stri
               </div>
               {/* Messages */}
               <div className="flex-1 overflow-y-auto px-8 py-5 space-y-3">
-                {messages.length === 0 && <div className="flex items-center justify-center h-full"><p className="text-[10px] uppercase tracking-[0.2em] font-bold text-noir/15 text-center">No messages yet. Send a message to your editor below.</p></div>}
-                {messages.map((msg) => (
+                {messages.length === 0 && <div className="flex items-center justify-center h-full"><p className="text-[10px] uppercase tracking-[0.2em] font-bold text-noir/15 text-center">{project.editor_can_chat ? "No messages yet. Send a message to your editor below." : "No messages yet. Send a message to the Agency below."}</p></div>}
+                {messages.filter(m => project.editor_can_chat || m.target_role === 'client' || m.sender_role === 'client' || m.target_role === 'all').map((msg) => (
                   <div key={msg.id} className={`flex ${msg.sender_role === 'client' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[70%] px-5 py-3 text-sm font-medium ${msg.sender_role === 'client' ? 'text-noir' : 'text-noir/70'}`} style={{ background: msg.sender_role === 'client' ? 'rgba(255,79,0,0.08)' : 'rgba(26,26,26,0.04)', border: `1px solid ${msg.sender_role === 'client' ? 'rgba(255,79,0,0.2)' : 'rgba(26,26,26,0.08)'}`, clipPath: 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))' }}>
                       <p>{msg.message_text}</p>
-                      <span className="text-[9px] uppercase tracking-wider text-noir/25 mt-1.5 block">{msg.sender_role === 'client' ? 'You' : 'Editor'} · {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span className="text-[9px] uppercase tracking-wider text-noir/25 mt-1.5 block">{msg.sender_role === 'client' ? 'You' : msg.sender_role === 'editor' ? 'Editor' : 'Agency'} · {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                   </div>
                 ))}
@@ -243,8 +324,8 @@ export default function ClientDashboard({ params }: { params: Promise<{ id: stri
               </div>
               {/* Input */}
               <form onSubmit={sendMessage} className="px-6 py-4 flex gap-3 shrink-0" style={{ borderTop: '1px solid rgba(255,79,0,0.1)' }}>
-                <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message to your editor..." className="flex-1 bg-noir/[0.04] text-noir text-sm px-5 py-3 font-medium placeholder:text-noir/20 focus:outline-none transition-colors" style={{ cursor: 'text', border: '1px solid rgba(26,26,26,0.08)', clipPath: 'polygon(0 3px, 3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px))' }} />
-                <button type="submit" className="bg-tarantino text-noir px-5 py-3 font-black uppercase text-xs tracking-[0.1em] hover:brightness-110 transition-colors flex items-center gap-2" style={{ cursor: 'pointer', clipPath: 'polygon(0 3px, 3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px))', boxShadow: '0 0 10px rgba(255,79,0,0.25)' }}>
+                <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder={project.editor_can_chat ? "Type a message to your editor..." : "Type a message to the Agency..."} className="flex-1 bg-noir/[0.04] text-noir text-sm px-5 py-3 font-medium placeholder:text-noir/20 focus:outline-none transition-colors" style={{ cursor: 'text', border: '1px solid rgba(26,26,26,0.08)', clipPath: 'polygon(0 3px, 3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px))' }} />
+                <button type="submit" disabled={!chatInput.trim()} className="bg-tarantino text-white px-5 py-3 text-xs font-bold uppercase tracking-widest hover:bg-noir active:scale-95 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed" style={{ clipPath: 'polygon(0 3px, 3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px))', boxShadow: '0 0 10px rgba(255,79,0,0.25)' }}>
                   Send <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>
                 </button>
               </form>
