@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -31,20 +31,19 @@ const darkCircuitSvg = `url("data:image/svg+xml,%3Csvg width='300' height='300' 
 
 const WS_URL = process.env.NEXT_PUBLIC_REALTIME_URL || 'wss://nore-realtime-engine.norehq01.workers.dev';
 
-export default function ClientDashboard({ params }: { params: Promise<{ id: string }> }) {
+export default function ClientDashboard() {
   const router = useRouter();
+  const paramsHook = useParams();
+  const projectId = paramsHook?.id as string;
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [mounted, setMounted] = useState(false);
-  const [projectId, setProjectId] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => { params.then((p) => setProjectId(p.id)); }, [params]);
 
   // ─── WebSocket Connection with Auto-Reconnect ───
   useEffect(() => {

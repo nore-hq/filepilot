@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -30,9 +30,10 @@ function CyberFrame({ children, dark = false, className = '' }: { children: Reac
 
 const WS_URL = process.env.NEXT_PUBLIC_REALTIME_URL || 'wss://nore-realtime-engine.norehq01.workers.dev';
 
-export default function EditorDashboard({ params }: { params: Promise<{ id: string }> }) {
+export default function EditorDashboard() {
   const router = useRouter();
-  const [editorId, setEditorId] = useState('');
+  const paramsHook = useParams();
+  const editorId = paramsHook?.id as string;
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -47,8 +48,6 @@ export default function EditorDashboard({ params }: { params: Promise<{ id: stri
   const chatEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const debounceRef = useRef<Record<string, NodeJS.Timeout>>({});
-
-  useEffect(() => { params.then((p) => setEditorId(p.id)); }, [params]);
 
   useEffect(() => {
     if (!editorId) return;

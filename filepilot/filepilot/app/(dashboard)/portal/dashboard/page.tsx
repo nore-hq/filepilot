@@ -321,8 +321,7 @@ export default function Dashboard() {
   };
 
   const copyLink = (type: 'client'|'editor', id: string) => {
-    const local = window.location.hostname.includes('localhost') || window.location.hostname.includes('127.0.0.1');
-    const link = local ? `http://localhost:3000/${type}/${id}?filepilot=true` : `https://filepilot.norehq.com/${type}/${id}`;
+    const link = `${window.location.origin}/${type}/${id}`;
     navigator.clipboard.writeText(link);
     setCopiedId(`${type}-${id}`);
     setTimeout(() => setCopiedId(null), 2000);
@@ -518,7 +517,7 @@ export default function Dashboard() {
                     
                     <div className="bg-noir/5 p-4 border border-noir/10 flex flex-col gap-2">
                       <code className="text-xs text-noir break-all">
-                        https://filepilot.norehq.com/client/{justCreatedClient.id}
+                        {typeof window !== 'undefined' ? window.location.origin : 'https://filepilot.norehq.com'}/client/{justCreatedClient.id}
                       </code>
                       <button onClick={() => copyLink('client', justCreatedClient.id)} className="bg-tarantino text-white py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir hover:-translate-y-0.5 active:scale-95 transition-all">
                         {copiedId === `client-${justCreatedClient.id}` ? 'Copied!' : 'Copy Link'}
@@ -559,7 +558,7 @@ export default function Dashboard() {
                     
                     <div className="bg-noir/5 p-4 border border-noir/10 flex flex-col gap-2">
                       <code className="text-xs text-noir break-all">
-                        https://filepilot.norehq.com/editor/{justCreatedEditor.custom_id}
+                        {typeof window !== 'undefined' ? window.location.origin : 'https://filepilot.norehq.com'}/editor/{justCreatedEditor.custom_id}
                       </code>
                       <button onClick={() => copyLink('editor', justCreatedEditor.custom_id)} className="bg-noir text-parchment py-2 text-xs font-bold uppercase tracking-widest hover:bg-tarantino hover:-translate-y-0.5 active:scale-95 transition-all">
                         {copiedId === `editor-${justCreatedEditor.custom_id}` ? 'Copied!' : 'Copy Link'}
