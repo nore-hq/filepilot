@@ -19,10 +19,12 @@ type Message = { id: number; project_id: string; sender_role: 'admin'|'editor'|'
 const CP = 'polygon(0 12px, 12px 0, calc(100% - 12px) 0, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0 calc(100% - 12px))';
 const CPS = 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))';
 
-function CyberFrame({ children, dark = false, className = '' }: { children: React.ReactNode; dark?: boolean; className?: string }) {
+function CyberFrame({ children, dark = false, className = '', contentClassName = '' }: { children: React.ReactNode; dark?: boolean; className?: string; contentClassName?: string }) {
   return (
     <div className={`relative ${className}`} style={{ padding: '1.5px', clipPath: CP, background: dark ? 'linear-gradient(135deg, rgba(255,79,0,0.5), rgba(80,80,80,0.4), rgba(255,79,0,0.3))' : 'linear-gradient(135deg, rgba(160,160,160,0.5), rgba(255,79,0,0.2), rgba(160,160,160,0.45))' }}>
-      <div style={{ clipPath: CP, background: dark ? '#1A1A1A' : 'rgba(241,239,231,0.93)' }} className="relative overflow-hidden">{children}</div>
+      <div style={{ clipPath: CP, background: dark ? '#1A1A1A' : 'rgba(241,239,231,0.93)' }} className={`relative overflow-hidden ${contentClassName}`}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -49,6 +51,10 @@ export default function Dashboard() {
   const [justCreatedClient, setJustCreatedClient] = useState<Project | null>(null);
   const [justCreatedEditor, setJustCreatedEditor] = useState<ChildEditor | null>(null);
 
+  // Master-Detail specific state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+
   const [activeChatProjectId, setActiveChatProjectId] = useState<string | null>(null);
   const [chatTarget, setChatTarget] = useState<'client' | 'editor' | 'all'>('client');
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
@@ -62,7 +68,6 @@ export default function Dashboard() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const debounceRef = useRef<Record<string, NodeJS.Timeout>>({});
   const router = useRouter();
 
   useEffect(() => { setMounted(true); fetchData(); }, []);
@@ -84,7 +89,7 @@ export default function Dashboard() {
     if (data) setChatMessages(data);
   };
 
-  // WebSocket Connection
+  // WebSocket Connection for the currently selected project's chat
   useEffect(() => {
     if (!activeChatProjectId) return;
     fetchMessages(activeChatProjectId);
@@ -208,7 +213,6 @@ export default function Dashboard() {
         });
       } catch (err) {
         console.error('Broadcast fallback failed', err);
-        // Fallback to direct DB update if the worker fails
         if (payload.type === 'progress') supabase.from('projects').update({ progress: payload.value }).eq('id', projectId);
         if (payload.type === 'delivery') supabase.from('projects').update({ delivery_link: payload.link }).eq('id', projectId);
         if (payload.type === 'authority_update') supabase.from('projects').update({ editor_can_chat: payload.editor_can_chat, editor_can_deliver: payload.editor_can_deliver }).eq('id', projectId);
@@ -242,11 +246,7 @@ export default function Dashboard() {
 
   const finalizeLink = async (projectId: string, link: string) => {
     setProjects(projects.map(p => p.id === projectId ? { ...p, delivery_link: link, editor_proposed_link: null } : p));
-    // Finalizing a link sets it as delivered and clears the proposal in the DB.
-    // The worker handles updating both in handleDeliveryUpdate if we send a delivery. 
-    // BUT we also need to clear editor_proposed_link in Supabase manually if the worker doesn't do it.
     await supabase.from('projects').update({ delivery_link: link, editor_proposed_link: null }).eq('id', projectId);
-    
     await broadcastToRoom(projectId, { type: 'delivery', project_id: projectId, link });
   };
 
@@ -259,7 +259,6 @@ export default function Dashboard() {
     if (v === undefined) return;
     setProjects(projects.map(p => p.id === id ? { ...p, progress: v } : p));
     
-    // Clear local override once confirmed
     const newLocal = { ...localProgress };
     delete newLocal[id];
     setLocalProgress(newLocal);
@@ -281,7 +280,10 @@ export default function Dashboard() {
     if (!window.confirm('Delete this client dashboard?')) return;
     setProjects(projects.filter(p => p.id !== id));
     await supabase.from('projects').delete().eq('id', id);
-    if (activeChatProjectId === id) setActiveChatProjectId(null);
+    if (selectedProjectId === id) {
+      setSelectedProjectId(null);
+      setActiveChatProjectId(null);
+    }
   };
 
   const deleteEditor = async (id: string) => {
@@ -297,7 +299,6 @@ export default function Dashboard() {
     setChatInput('');
     
     const p = projects.find(x => x.id === activeChatProjectId);
-    // If editor_can_chat is true, target_role is 'all'
     const target = p?.editor_can_chat ? 'all' : chatTarget;
 
     setChatMessages(prev => [...prev, {
@@ -327,12 +328,17 @@ export default function Dashboard() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const filteredProjects = projects.filter(p => 
+    p.client_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    p.video_title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div className="min-h-screen bg-parchment font-sans" style={{ cursor: 'auto', backgroundImage: circuitBg }}>
-      <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
+      <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 flex flex-col h-screen overflow-hidden">
         
         {/* Header & Tabs */}
-        <div className={`mb-8 transition-all duration-700 ease-out ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
+        <div className={`shrink-0 mb-6 transition-all duration-700 ease-out ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
             <h1 className="font-heading text-3xl md:text-4xl font-black uppercase tracking-tighter text-noir leading-none">
               Agency <span className="text-tarantino italic">Portal</span>
@@ -355,134 +361,190 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Tab Content */}
-        <div className={`transition-all duration-700 ease-out delay-100 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
+        {/* Tab Content (Fills remaining height) */}
+        <div className={`flex-1 overflow-hidden transition-all duration-700 ease-out delay-100 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
           
-          {/* WORKPLACE */}
+          {/* WORKPLACE (Master-Detail) */}
           {activeTab === 'workplace' && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {projects.length === 0 ? (
-                <div className="lg:col-span-2 text-center py-16 text-noir/40 font-bold uppercase tracking-widest">No clients assigned to workplace yet.</div>
-              ) : (
-                projects.map((project) => {
-                  const currentProg = localProgress[project.id] !== undefined ? localProgress[project.id] : project.progress;
-                  const isProgChanged = localProgress[project.id] !== undefined && localProgress[project.id] !== project.progress;
-                  
-                  const authChat = localAuth[project.id]?.chat !== undefined ? localAuth[project.id]!.chat! : project.editor_can_chat;
-                  const authDeliver = localAuth[project.id]?.deliver !== undefined ? localAuth[project.id]!.deliver! : project.editor_can_deliver;
-                  const isAuthChanged = (localAuth[project.id]?.chat !== undefined && localAuth[project.id]!.chat !== project.editor_can_chat) || (localAuth[project.id]?.deliver !== undefined && localAuth[project.id]!.deliver !== project.editor_can_deliver);
-
-                  return (
-                  <CyberFrame key={project.id} className="h-full">
-                    <div className="p-4 md:p-6 flex flex-col h-full relative">
-                      
-                      {/* Top bar: Client info + Editor Assignment */}
-                      <div className="flex justify-between items-start mb-4">
+            <div className="flex flex-col lg:flex-row gap-6 h-full pb-4">
+              
+              {/* SIDEBAR: Master List */}
+              <div className={`flex-col w-full lg:w-[35%] shrink-0 h-full ${selectedProjectId ? 'hidden lg:flex' : 'flex'}`}>
+                {/* Search Bar */}
+                <div className="mb-4 shrink-0 relative">
+                  <input 
+                    type="text" 
+                    placeholder="SEARCH CLIENTS..." 
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="w-full bg-noir/5 border-b-2 border-noir/20 pl-10 pr-4 py-3 text-xs uppercase font-bold text-noir outline-none focus:border-tarantino transition-colors placeholder:text-noir/30"
+                  />
+                  <svg className="w-4 h-4 text-noir/40 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                </div>
+                
+                {/* Project List */}
+                <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                  {filteredProjects.map((p) => (
+                    <div 
+                      key={p.id} 
+                      onClick={() => { setSelectedProjectId(p.id); setActiveChatProjectId(p.id); }}
+                      className={`p-4 cursor-pointer border-l-4 transition-all group ${selectedProjectId === p.id ? 'border-tarantino bg-tarantino/10' : 'border-noir/20 bg-noir/5 hover:border-tarantino/50 hover:bg-noir/10'}`}
+                      style={{ clipPath: CPS }}
+                    >
+                      <div className="flex justify-between items-start mb-2">
                         <div>
-                          <h2 className="text-xl md:text-2xl font-black text-noir tracking-tight leading-none mb-1">{project.client_name}</h2>
-                          <p className="text-sm font-bold uppercase tracking-widest text-tarantino">{project.video_title}</p>
+                          <h3 className={`font-black text-lg leading-tight transition-colors ${selectedProjectId === p.id ? 'text-tarantino' : 'text-noir group-hover:text-tarantino'}`}>{p.client_name}</h3>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-noir/50">{p.video_title}</p>
                         </div>
-                        <div className="flex flex-col items-end gap-2">
-                          <select 
-                            value={project.assigned_editor_id || 'none'}
-                            onChange={(e) => assignEditor(project.id, e.target.value)}
-                            className="bg-transparent border border-noir/20 text-noir text-xs font-bold uppercase tracking-widest rounded-none px-2 py-1 outline-none focus:border-tarantino"
-                          >
-                            <option value="none">Unassigned</option>
-                            {childEditors.map(ed => (
-                              <option key={ed.id} value={ed.id}>{ed.name}</option>
-                            ))}
-                          </select>
-                          
-                          {project.assigned_editor_id && (
-                            <div className="flex flex-col items-end gap-1 mt-2 bg-noir/5 p-2 rounded-sm border border-noir/10">
-                              <label className="text-[10px] uppercase font-bold text-noir/70 flex items-center gap-2 cursor-pointer">
-                                <span>Authorize Chat</span>
-                                <input type="checkbox" checked={authChat} onChange={(e) => setLocalAuth({ ...localAuth, [project.id]: { ...localAuth[project.id], chat: e.target.checked } })} className="accent-tarantino" />
-                              </label>
-                              <label className="text-[10px] uppercase font-bold text-noir/70 flex items-center gap-2 cursor-pointer">
-                                <span>Authorize Deliver</span>
-                                <input type="checkbox" checked={authDeliver} onChange={(e) => setLocalAuth({ ...localAuth, [project.id]: { ...localAuth[project.id], deliver: e.target.checked } })} className="accent-tarantino" />
-                              </label>
-                              {isAuthChanged && (
-                                <button onClick={() => confirmAuth(project.id)} className="bg-tarantino text-white px-2 py-1 mt-1 text-[10px] font-bold uppercase tracking-widest hover:bg-noir active:scale-95 transition-all">
-                                  Confirm Auth
-                                </button>
+                        {p.editor_proposed_link && !p.editor_can_deliver && (
+                          <span className="w-2 h-2 rounded-full bg-tarantino animate-pulse mt-1" title="Action Required" />
+                        )}
+                      </div>
+                      
+                      <div className="flex justify-between items-center mt-4">
+                        <span className="text-[9px] uppercase tracking-widest font-bold text-noir/40 bg-noir/5 px-2 py-1">
+                          {p.assigned_editor_id ? childEditors.find(e => e.id === p.assigned_editor_id)?.name || 'Unknown' : 'Unassigned'}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-noir/60">{p.progress}%</span>
+                          <div className="w-16 h-1 bg-noir/10 overflow-hidden">
+                            <div className="h-full bg-tarantino" style={{ width: `${p.progress}%` }} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredProjects.length === 0 && (
+                    <div className="text-center py-10 text-[10px] font-bold uppercase tracking-widest text-noir/40">No clients match search.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* MAIN CONTENT: Detail View */}
+              <div className={`w-full lg:w-[65%] h-full flex-col ${selectedProjectId ? 'flex' : 'hidden lg:flex'}`}>
+                {!selectedProjectId ? (
+                  <div className="h-full flex items-center justify-center border-2 border-dashed border-noir/10 bg-noir/5">
+                    <p className="text-sm font-bold uppercase tracking-widest text-noir/30 text-center">Select a client from the list<br/>to manage their workspace</p>
+                  </div>
+                ) : (
+                  (() => {
+                    const project = projects.find(p => p.id === selectedProjectId);
+                    if (!project) return null;
+                    
+                    const currentProg = localProgress[project.id] !== undefined ? localProgress[project.id] : project.progress;
+                    const isProgChanged = localProgress[project.id] !== undefined && localProgress[project.id] !== project.progress;
+                    const authChat = localAuth[project.id]?.chat !== undefined ? localAuth[project.id]!.chat! : project.editor_can_chat;
+                    const authDeliver = localAuth[project.id]?.deliver !== undefined ? localAuth[project.id]!.deliver! : project.editor_can_deliver;
+                    const isAuthChanged = (localAuth[project.id]?.chat !== undefined && localAuth[project.id]!.chat !== project.editor_can_chat) || (localAuth[project.id]?.deliver !== undefined && localAuth[project.id]!.deliver !== project.editor_can_deliver);
+
+                    return (
+                      <CyberFrame className="h-full flex flex-col" contentClassName="flex flex-col h-full">
+                        {/* Mobile Back Button */}
+                        <div className="lg:hidden bg-noir px-4 py-3 flex items-center">
+                           <button onClick={() => { setSelectedProjectId(null); setActiveChatProjectId(null); }} className="text-[10px] text-parchment font-bold uppercase tracking-widest flex items-center gap-2 hover:text-tarantino">
+                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+                             Back to List
+                           </button>
+                        </div>
+
+                        {/* Top Section: Settings & Progress */}
+                        <div className="p-4 md:p-6 shrink-0 bg-parchment/95" style={{ borderBottom: '1px solid rgba(26,26,26,0.1)' }}>
+                          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                            <div>
+                              <h2 className="text-2xl md:text-3xl font-black text-noir tracking-tight leading-none mb-1">{project.client_name}</h2>
+                              <p className="text-xs font-bold uppercase tracking-widest text-tarantino">{project.video_title}</p>
+                            </div>
+                            
+                            {/* Editor Assignment */}
+                            <div className="flex flex-col items-start md:items-end gap-2 bg-noir/5 p-3 w-full md:w-auto" style={{ clipPath: CPS }}>
+                              <select 
+                                value={project.assigned_editor_id || 'none'}
+                                onChange={(e) => assignEditor(project.id, e.target.value)}
+                                className="bg-white/50 border border-noir/20 text-noir text-[10px] font-bold uppercase tracking-widest rounded-none px-2 py-1.5 outline-none focus:border-tarantino w-full md:w-48"
+                              >
+                                <option value="none">-- Assign Editor --</option>
+                                {childEditors.map(ed => (
+                                  <option key={ed.id} value={ed.id}>{ed.name}</option>
+                                ))}
+                              </select>
+                              
+                              {project.assigned_editor_id && (
+                                <div className="flex flex-col items-start md:items-end gap-1 w-full">
+                                  <label className="text-[9px] uppercase font-bold text-noir/70 flex items-center gap-2 cursor-pointer">
+                                    <span>Allow Chat with Client</span>
+                                    <input type="checkbox" checked={authChat} onChange={(e) => setLocalAuth({ ...localAuth, [project.id]: { ...localAuth[project.id], chat: e.target.checked } })} className="accent-tarantino" />
+                                  </label>
+                                  <label className="text-[9px] uppercase font-bold text-noir/70 flex items-center gap-2 cursor-pointer">
+                                    <span>Allow Final Delivery</span>
+                                    <input type="checkbox" checked={authDeliver} onChange={(e) => setLocalAuth({ ...localAuth, [project.id]: { ...localAuth[project.id], deliver: e.target.checked } })} className="accent-tarantino" />
+                                  </label>
+                                  {isAuthChanged && (
+                                    <button onClick={() => confirmAuth(project.id)} className="w-full bg-tarantino text-white px-2 py-1.5 mt-1 text-[9px] font-bold uppercase tracking-widest hover:bg-noir transition-colors">
+                                      Save Auth
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </div>
-                          )}
-                        </div>
-                      </div>
+                          </div>
 
-                      {/* Progress Bar */}
-                      <div className="mb-6">
-                        <div className="flex justify-between items-end mb-2">
-                          <span className="text-xs font-bold uppercase tracking-widest text-noir/50">Progress</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg font-black text-noir">{currentProg}%</span>
-                            {isProgChanged && (
-                              <button onClick={() => confirmProgress(project.id)} className="ml-2 bg-tarantino text-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-noir active:scale-95 transition-all">
-                                Confirm
-                              </button>
-                            )}
+                          {/* Progress & Delivery */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* Progress */}
+                            <div>
+                              <div className="flex justify-between items-end mb-2">
+                                <span className="text-[10px] font-bold uppercase tracking-widest text-noir/50">Progress</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-black text-noir">{currentProg}%</span>
+                                  {isProgChanged && (
+                                    <button onClick={() => confirmProgress(project.id)} className="bg-tarantino text-white px-2 py-1 text-[9px] font-bold uppercase tracking-widest hover:bg-noir transition-all">Save</button>
+                                  )}
+                                </div>
+                              </div>
+                              <input type="range" min="0" max="100" value={currentProg} onChange={(e) => handleLocalProgressChange(project.id, parseInt(e.target.value))} className="w-full h-1.5 bg-noir/10 appearance-none cursor-ew-resize accent-tarantino" />
+                            </div>
+
+                            {/* Delivery Link */}
+                            <div>
+                              <span className="text-[10px] font-bold uppercase tracking-widest text-noir/50 block mb-2">Final Delivery Link</span>
+                              <div className="flex gap-2">
+                                <input type="text" value={project.delivery_link || ''} onChange={(e) => updateDeliveryLink(project.id, e.target.value)} placeholder="https://..." className="flex-1 bg-white/50 border border-noir/20 px-2 py-1.5 text-xs font-medium text-noir outline-none focus:border-tarantino transition-colors" />
+                                <button onClick={() => saveDeliveryLink(project.id)} className="bg-noir text-parchment px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest hover:bg-tarantino transition-colors" style={{ clipPath: CPS }}>Save</button>
+                              </div>
+                              {project.editor_proposed_link && !project.editor_can_deliver && (
+                                <div className="mt-2 p-2 border border-tarantino/30 bg-tarantino/5 flex flex-col gap-1.5">
+                                  <span className="text-[9px] font-bold uppercase text-tarantino tracking-widest">Editor Proposed:</span>
+                                  <a href={project.editor_proposed_link} target="_blank" className="text-[10px] text-noir underline break-all font-medium">{project.editor_proposed_link}</a>
+                                  <button onClick={() => finalizeLink(project.id, project.editor_proposed_link!)} className="bg-tarantino text-white px-2 py-1 text-[9px] font-bold uppercase tracking-widest hover:bg-noir transition-colors self-start mt-1">Finalize</button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                        <input type="range" min="0" max="100" value={currentProg} onChange={(e) => handleLocalProgressChange(project.id, parseInt(e.target.value))} className="w-full h-2 bg-noir/10 rounded-none appearance-none cursor-ew-resize accent-tarantino" />
-                      </div>
 
-                      {/* Delivery Link Section */}
-                      <div className="mb-6 p-4 bg-noir/5 border border-noir/10">
-                        <span className="text-xs font-bold uppercase tracking-widest text-noir/50 block mb-2">Final Delivery Link</span>
-                        <div className="flex gap-2">
-                          <input type="text" value={project.delivery_link || ''} onChange={(e) => updateDeliveryLink(project.id, e.target.value)} placeholder="https://..." className="flex-1 bg-white/50 border border-noir/20 px-2 py-1 text-xs font-medium text-noir outline-none focus:border-tarantino transition-colors" />
-                          <button onClick={() => saveDeliveryLink(project.id)} className="bg-noir text-parchment px-3 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:-translate-y-0.5 active:scale-95 transition-all" style={{ clipPath: CPS }}>Save</button>
-                        </div>
-                        
-                        {/* Editor Proposed Link */}
-                        {project.editor_proposed_link && !project.editor_can_deliver && (
-                          <div className="mt-4 p-3 border border-tarantino/30 bg-tarantino/5 flex flex-col gap-2">
-                            <span className="text-[10px] font-bold uppercase text-tarantino tracking-widest">Editor Proposed Link</span>
-                            <a href={project.editor_proposed_link} target="_blank" className="text-xs text-noir underline break-all">{project.editor_proposed_link}</a>
-                            <button onClick={() => finalizeLink(project.id, project.editor_proposed_link!)} className="bg-tarantino text-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-noir hover:-translate-y-0.5 active:scale-95 transition-all self-start">Finalize & Send to Client</button>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Chat / Open Workspace Button */}
-                      <div className="mt-auto">
-                        {activeChatProjectId === project.id ? (
-                          <button onClick={() => setActiveChatProjectId(null)} className="w-full bg-noir text-parchment py-2 text-xs font-bold uppercase tracking-widest hover:bg-tarantino hover:-translate-y-0.5 active:scale-95 transition-all flex justify-center items-center gap-2" style={{ clipPath: CPS }}>Close Workspace Chat</button>
-                        ) : (
-                          <button onClick={() => setActiveChatProjectId(project.id)} className="w-full bg-parchment border-2 border-noir text-noir py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir hover:text-parchment hover:-translate-y-0.5 active:scale-95 transition-all flex justify-center items-center gap-2" style={{ clipPath: CPS }}>Open Workspace Chat</button>
-                        )}
-                      </div>
-
-                      {/* Chat Panel (when active) */}
-                      {activeChatProjectId === project.id && (
-                        <div className="mt-4 border-2 border-noir flex flex-col h-80 bg-white">
-                          
-                          {/* Chat Header / Target Selector */}
-                          <div className="flex border-b-2 border-noir">
+                        {/* Bottom Section: Chat (Takes up remaining height) */}
+                        <div className="flex-1 flex flex-col min-h-0 bg-white">
+                          <div className="flex border-b-2 border-noir shrink-0">
                             {project.editor_can_chat ? (
-                              <div className="flex-1 p-2 bg-noir/5 text-center text-xs font-bold uppercase tracking-widest text-noir">Unified Group Chat (Admin, Client, Editor)</div>
+                              <div className="flex-1 p-2 bg-noir/5 text-center text-[10px] font-bold uppercase tracking-widest text-noir">Unified Group Chat</div>
                             ) : (
                               <>
-                                <button onClick={() => setChatTarget('client')} className={`flex-1 p-2 text-xs font-bold uppercase tracking-widest transition-colors ${chatTarget === 'client' ? 'bg-noir text-white' : 'bg-white text-noir hover:bg-noir/5'}`}>Client Chat</button>
+                                <button onClick={() => setChatTarget('client')} className={`flex-1 p-2 text-[10px] font-bold uppercase tracking-widest transition-colors ${chatTarget === 'client' ? 'bg-noir text-white' : 'bg-white text-noir hover:bg-noir/5'}`}>Client Chat</button>
                                 {project.assigned_editor_id && (
-                                  <button onClick={() => setChatTarget('editor')} className={`flex-1 p-2 border-l-2 border-noir text-xs font-bold uppercase tracking-widest transition-colors ${chatTarget === 'editor' ? 'bg-tarantino text-white' : 'bg-white text-noir hover:bg-noir/5'}`}>Editor Chat</button>
+                                  <button onClick={() => setChatTarget('editor')} className={`flex-1 p-2 border-l-2 border-noir text-[10px] font-bold uppercase tracking-widest transition-colors ${chatTarget === 'editor' ? 'bg-tarantino text-white' : 'bg-white text-noir hover:bg-noir/5'}`}>Editor Chat</button>
                                 )}
                               </>
                             )}
                           </div>
 
-                          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-                            {chatMessages.length === 0 && <div className="text-center text-noir/40 text-xs font-bold uppercase tracking-widest my-auto">No messages yet.</div>}
+                          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 custom-scrollbar bg-parchment/30">
+                            {chatMessages.length === 0 && <div className="text-center text-noir/40 text-[10px] font-bold uppercase tracking-widest my-auto">No messages yet.</div>}
                             {chatMessages.filter(m => project.editor_can_chat || m.target_role === chatTarget || m.target_role === 'all' || (m.sender_role === chatTarget)).map((msg) => {
                               const isAdmin = msg.sender_role === 'admin';
                               return (
                                 <div key={msg.id} className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}>
                                   <span className="text-[9px] uppercase tracking-widest text-noir/40 font-bold mb-1">{msg.sender_role}</span>
-                                  <div className={`px-4 py-2 text-sm max-w-[85%] ${isAdmin ? 'bg-noir text-parchment' : 'bg-parchment border border-noir/10 text-noir'}`} style={{ clipPath: CPS }}>
+                                  <div className={`px-4 py-2.5 text-sm max-w-[85%] font-medium ${isAdmin ? 'bg-noir text-parchment' : 'bg-parchment border border-noir/10 text-noir'}`} style={{ clipPath: CPS }}>
                                     {msg.message_text}
                                   </div>
                                 </div>
@@ -491,23 +553,24 @@ export default function Dashboard() {
                             <div ref={chatEndRef} />
                           </div>
 
-                          <form onSubmit={sendMessage} className="p-2 border-t-2 border-noir flex gap-2 bg-parchment">
-                            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder={`Message ${project.editor_can_chat ? 'everyone' : chatTarget}...`} className="flex-1 bg-transparent border-none outline-none text-sm px-2 font-medium" />
-                            <button type="submit" disabled={!wsConnected} className="bg-tarantino text-white px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>Send</button>
+                          <form onSubmit={sendMessage} className="p-3 border-t-2 border-noir flex gap-2 bg-parchment shrink-0">
+                            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder={`Message ${project.editor_can_chat ? 'everyone' : chatTarget}...`} className="flex-1 bg-white/50 border border-noir/10 px-3 py-2 text-sm font-medium outline-none focus:border-tarantino transition-colors" />
+                            <button type="submit" disabled={!wsConnected || !chatInput.trim()} className="bg-tarantino text-white px-5 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-noir transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>Send</button>
                           </form>
                         </div>
-                      )}
-                    </div>
-                  </CyberFrame>
-                  );
-                })
-              )}
+
+                      </CyberFrame>
+                    );
+                  })()
+                )}
+              </div>
+
             </div>
           )}
 
-          {/* CREATE CLIENT */}
+          {/* CREATE CLIENT (Scrollable if needed) */}
           {activeTab === 'create_client' && (
-            <div className="max-w-md">
+            <div className="max-w-md overflow-y-auto h-full pb-8">
               <CyberFrame>
                 {justCreatedClient ? (
                   <div className="p-6 md:p-8 flex flex-col gap-6 text-center">
@@ -548,7 +611,7 @@ export default function Dashboard() {
 
           {/* CREATE EDITOR */}
           {activeTab === 'create_editor' && (
-            <div className="max-w-md">
+            <div className="max-w-md overflow-y-auto h-full pb-8">
               <CyberFrame>
                 {justCreatedEditor ? (
                   <div className="p-6 md:p-8 flex flex-col gap-6 text-center">
@@ -593,7 +656,7 @@ export default function Dashboard() {
 
           {/* ACCOUNTS */}
           {activeTab === 'accounts' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 overflow-y-auto h-full pb-8 pr-2 custom-scrollbar">
               
               {/* Clients */}
               <div>
@@ -603,7 +666,7 @@ export default function Dashboard() {
                     <div key={p.id} className="p-4 border-2 border-noir/10 flex justify-between items-center hover:border-noir transition-colors bg-white/50">
                       <div>
                         <div className="font-bold text-noir">{p.client_name}</div>
-                        <div className="text-xs font-bold uppercase tracking-widest text-tarantino">{p.video_title}</div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-tarantino">{p.video_title}</div>
                       </div>
                       <div className="flex gap-2">
                         <button onClick={() => copyLink('client', p.id)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-noir active:scale-95 transition-transform">{copiedId === `client-${p.id}` ? 'Copied!' : 'Copy Link'}</button>
@@ -623,7 +686,7 @@ export default function Dashboard() {
                     <div key={e.id} className="p-4 border-2 border-noir/10 flex justify-between items-center hover:border-noir transition-colors bg-white/50">
                       <div>
                         <div className="font-bold text-noir">{e.name}</div>
-                        <div className="text-xs font-bold uppercase tracking-widest text-noir/50">ID: {e.custom_id}</div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-noir/50">ID: {e.custom_id}</div>
                       </div>
                       <div className="flex gap-2">
                         <button onClick={() => copyLink('editor', e.custom_id)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-noir active:scale-95 transition-transform">{copiedId === `editor-${e.custom_id}` ? 'Copied!' : 'Copy Link'}</button>
