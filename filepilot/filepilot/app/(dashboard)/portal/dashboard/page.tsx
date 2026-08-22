@@ -10,7 +10,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 type ChildEditor = { id: string; name: string; custom_id: string; created_at: string; };
 type Project = { 
-  id: string; client_name: string; video_title: string; progress: number; 
+  id: string; admin_id: string; client_name: string; video_title: string; progress: number; 
   delivery_link: string | null; editor_proposed_link: string | null;
   assigned_editor_id: string | null; editor_can_chat: boolean; editor_can_deliver: boolean; editor_can_invoice: boolean;
   created_at: string; 
