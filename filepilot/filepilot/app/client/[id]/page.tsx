@@ -3,13 +3,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
+import InvoicePrintView from '../../../components/InvoicePrintView';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-type Project = { id: string; client_name: string; video_title: string; progress: number; delivery_link: string | null; editor_can_chat: boolean; };
+type Project = { id: string; client_name: string; video_title: string; progress: number; delivery_link: string | null; editor_can_chat: boolean; admin_id: string; };
 type Message = { id: number; project_id: string; sender_role: 'admin' | 'editor' | 'client'; target_role: string; message_text: string; created_at: string; };
+
+type Invoice = {
+  id: string;
+  total_amount: number;
+  currency_symbol: string;
+  items: any[];
+  status: string;
+  created_at: string;
+};
 
 /* ─── Cyberpunk beveled frame ─── */
 const CP = 'polygon(0 14px, 14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px), calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px))';
@@ -38,6 +48,8 @@ export default function ClientDashboard() {
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [chatInput, setChatInput] = useState('');
   const [mounted, setMounted] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -135,8 +147,16 @@ export default function ClientDashboard() {
   // ─── Supabase: Initial Data Fetch ───
   const fetchProject = async () => {
     setLoading(true);
-    const { data } = await supabase.from('projects').select('*').eq('id', projectId).single();
-    if (data) setProject(data);
+    try {
+      const { data } = await supabase.from('projects').select('*').eq('id', projectId).single();
+      if (data) {
+        setProject(data);
+        const { data: invData } = await supabase.from('invoices').select('*').eq('project_id', data.id).order('created_at', { ascending: false });
+        if (invData) setInvoices(invData as Invoice[]);
+      }
+    } catch (err) {
+      console.error(err);
+    }
     setLoading(false);
   };
 
@@ -322,7 +342,51 @@ export default function ClientDashboard() {
             </div>
           </CyberFrame>
         </div>
+
+        {/* ─── Billing & Invoices ─── */}
+        {invoices.length > 0 && (
+          <div className="mt-12 transition-all duration-700 ease-out delay-300">
+            <h2 className="font-heading text-2xl font-black uppercase tracking-tight text-noir mb-6 flex items-center gap-3">
+              <span className="text-tarantino">Billing</span> & Invoices
+              <span className="flex-1 h-px bg-gradient-to-r from-noir/10 to-transparent ml-4"></span>
+            </h2>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {invoices.map(inv => (
+                <CyberFrame key={inv.id}>
+                  <div className="p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Invoice Date</div>
+                        <div className="text-sm font-bold text-noir">{new Date(inv.created_at).toLocaleDateString()}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Amount</div>
+                        <div className="text-xl font-black text-tarantino leading-none mt-1">{inv.currency_symbol}{inv.total_amount.toLocaleString()}</div>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setSelectedInvoice(inv)}
+                      className="w-full bg-noir text-parchment py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:text-white transition-colors mt-4" style={{ clipPath: 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))' }}
+                    >
+                      View & Download
+                    </button>
+                  </div>
+                </CyberFrame>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Invoice Modal */}
+      {selectedInvoice && (
+        <InvoicePrintView 
+          invoice={selectedInvoice} 
+          clientName={project.client_name} 
+          onClose={() => setSelectedInvoice(null)} 
+        />
+      )}
     </div>
   );
 }

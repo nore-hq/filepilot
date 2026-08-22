@@ -9,12 +9,11 @@ const config = {
     extend: {
       colors: {
         parchment: '#F1EFE7',
-        tarantino: '#FF4F00', // Updated to match your CSS root
+        tarantino: '#FF4F00',
         noir: '#1A1A1A',
         burnt: '#C2410C',
       },
       fontFamily: {
-        // 1. Create a custom font family mapping to your variable
         heading: ['var(--font-syne)', 'sans-serif'],
       },
     },

@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import { Syne } from 'next/font/google';
 // @ts-ignore: allow side-effect CSS import without type declarations
 import './globals.css';
+import MaintenanceListener from '../components/MaintenanceListener';
 
 // 1. Configure the font and create a CSS variable
 const syne = Syne({ 
@@ -318,6 +319,7 @@ export default function RootLayout({
         />
       </head>
       <body className={`bg-parchment antialiased ${syne.variable} relative`}>
+        <MaintenanceListener />
         {children}
       </body>
     </html>
