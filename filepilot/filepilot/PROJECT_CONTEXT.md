@@ -284,6 +284,7 @@ filepilot/                          ← Git root
 3. **Error Handling**: Always wrap Supabase calls in `try/catch` and surface errors visually (alerts or toast notifications).
 4. **Link Security**: Client links use UUID project IDs — keep them unpredictable.
 5. **Mobile Responsiveness**: Clients will open links on phones. The client dashboard must be fully responsive.
+6. **Run `npm run dev` from**: `c:\E_folder\AGENCY\filepilot\filepilot\filepilot\` (the innermost folder with `package.json ).
 6. **Run `npm run dev` from**: `c:\E_folder\AGENCY\filepilot\filepilot\filepilot\` (the innermost folder with `package.json`).
 7. **Run the Cloudflare Worker locally**: `npx wrangler dev` from `c:\E_folder\AGENCY\filepilot\nore-realtime-engine\`.
 
