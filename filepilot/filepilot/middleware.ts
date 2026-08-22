@@ -18,6 +18,11 @@ export const config = {
 export function middleware(req: NextRequest) {
   const url = req.nextUrl;
   
+  // Prevent infinite rewrite loops on Cloudflare Pages
+  if (url.pathname.startsWith('/portal')) {
+    return NextResponse.next();
+  }
+  
   // FilePilot portal rewrite
   // Since this project only serves the portal, rewrite all requests to /portal
   const path = url.pathname === '/' ? '/login' : url.pathname;
