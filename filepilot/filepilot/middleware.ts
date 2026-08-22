@@ -9,9 +9,11 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
+     * - client/ (direct route — no rewrite needed)
+     * - editor/ (direct route — no rewrite needed)
      * - images, fonts, etc.
      */
-    '/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!api|_next/static|_next/image|favicon.ico|client/|editor/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };
 
@@ -24,7 +26,7 @@ export function middleware(req: NextRequest) {
   }
   
   // FilePilot portal rewrite
-  // Since this project only serves the portal, rewrite all requests to /portal
+  // Only rewrites /login, /dashboard, etc. — NOT /client/* or /editor/* (those are direct routes now)
   const path = url.pathname === '/' ? '/login' : url.pathname;
   return NextResponse.rewrite(new URL(`/portal${path}`, req.url));
 }
