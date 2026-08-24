@@ -235,77 +235,41 @@ export default function EditorDashboard() {
           <div className="text-center py-20 text-noir/40 font-bold uppercase tracking-widest">No projects assigned to you.</div>
         ) : (
           <div className="flex flex-col gap-8">
-            {projects.map((project) => {
-              const currentProg = localProgress[project.id] !== undefined ? localProgress[project.id] : project.progress;
-              const isProgChanged = localProgress[project.id] !== undefined && localProgress[project.id] !== project.progress;
-
-              return (
-              <CyberFrame key={project.id}>
-                <div className="p-4 md:p-6">
-                  <div className="mb-4">
-                    <h2 className="text-xl md:text-2xl font-black text-noir">{project.client_name}</h2>
-                    <p className="text-sm font-bold uppercase text-tarantino">{project.video_title}</p>
-                  </div>
-
-                  {/* Progress Bar */}
-                  <div className="mb-6">
-                    <div className="flex justify-between items-end mb-2">
-                      <span className="text-xs font-bold uppercase text-noir/50">Progress</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg font-black text-noir">{currentProg}%</span>
-                        {isProgChanged && (
-                          <button onClick={() => confirmProgress(project.id)} className="bg-tarantino text-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-noir active:scale-95 transition-all">
-                            Confirm
-                          </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {projects.map((project) => (
+                <div 
+                  key={project.id} 
+                  onClick={() => router.push(`/portal/editor/${editorId}/project/${project.id}`)}
+                  className="cursor-pointer group h-full"
+                >
+                  <CyberFrame className="h-full transition-transform duration-300 group-hover:-translate-y-1">
+                    <div className="p-6 md:p-8 flex flex-col h-full bg-white/50 group-hover:bg-white transition-colors">
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <h3 className="font-heading text-2xl font-black uppercase tracking-tight text-noir group-hover:text-tarantino transition-colors">{project.client_name}</h3>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-noir/50 mt-1">{project.video_title}</p>
+                        </div>
+                        {project.editor_can_deliver && project.progress === 100 && !project.delivery_link && (
+                          <span className="w-2.5 h-2.5 rounded-full bg-tarantino animate-pulse mt-1" title="Action Required" />
                         )}
                       </div>
-                    </div>
-                    <input type="range" min="0" max="100" value={currentProg} onChange={(e) => handleLocalProgressChange(project.id, parseInt(e.target.value))} className="w-full h-2 bg-noir/10 appearance-none accent-tarantino" />
-                  </div>
-
-                  {/* Delivery Link */}
-                  <div className="mb-6 p-4 bg-noir/5">
-                    <span className="text-xs font-bold uppercase text-noir/50 block mb-2">
-                      {project.editor_can_deliver ? "Update Final Delivery Link" : "Propose Delivery Link to Admin"}
-                    </span>
-                    <div className="flex gap-2 mb-2">
-                      <input type="text" value={proposedLink} onChange={(e) => setProposedLink(e.target.value)} placeholder="https://..." className="flex-1 px-2 py-1 text-xs border border-noir/20 focus:border-tarantino outline-none" />
-                      <button onClick={() => handleProposeLink(project.id)} className="bg-noir text-white px-3 py-1 text-[10px] font-bold uppercase hover:bg-tarantino active:scale-95 transition-all" style={{ clipPath: CPS }}>Send</button>
-                    </div>
-                    {project.editor_proposed_link && !project.editor_can_deliver && (
-                      <p className="text-[10px] text-tarantino font-bold">Currently proposed: {project.editor_proposed_link}</p>
-                    )}
-                    {project.delivery_link && (
-                      <p className="text-[10px] text-green-700 font-bold">Final link delivered: {project.delivery_link}</p>
-                    )}
-                  </div>
-
-                  {/* Chat Toggle */}
-                  {activeChatProjectId !== project.id ? (
-                    <button onClick={() => setActiveChatProjectId(project.id)} className="w-full bg-parchment border-2 border-noir text-noir py-2 text-xs font-bold uppercase hover:bg-noir hover:text-white hover:-translate-y-0.5 active:scale-95 transition-all" style={{ clipPath: CPS }}>Open Chat</button>
-                  ) : (
-                    <div className="mt-4 border-2 border-noir flex flex-col h-80 bg-white">
                       
-                      <div className="flex border-b-2 border-noir">
-                        {project.editor_can_chat ? (
-                          <div className="flex-1 p-2 bg-noir/5 text-center text-xs font-bold uppercase text-noir">Unified Group Chat</div>
-                        ) : (
-                          <div className="flex-1 p-2 bg-noir/5 text-center text-xs font-bold uppercase text-noir">Admin Chat (Client cannot see)</div>
-                        )}
+                      <div className="mt-auto pt-6 border-t border-noir/10">
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="text-[9px] uppercase tracking-widest font-bold text-noir/50 bg-noir/5 px-2 py-1">
+                            Progress
+                          </span>
+                          <span className="text-lg font-black text-tarantino leading-none">{project.progress}%</span>
+                        </div>
+                        <div className="w-full h-1 bg-noir/10 overflow-hidden relative">
+                          <div className="h-full bg-tarantino absolute left-0 top-0 transition-all duration-500" style={{ width: `${project.progress}%` }} />
+                        </div>
                       </div>
-
-                      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-                        {chatMessages.filter(m => project.editor_can_chat || m.target_role === 'editor' || m.sender_role === 'editor' || m.target_role === 'all').map((msg) => {
-                          const isMe = msg.sender_role === 'editor';
-                          return (
-                            <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                              <span className="text-[9px] uppercase text-noir/40 font-bold mb-1">{msg.sender_role}</span>
-                              <div className={`px-4 py-2 text-sm max-w-[85%] ${isMe ? 'bg-noir text-white' : 'bg-parchment border border-noir/10 text-noir'}`} style={{ clipPath: CPS }}>
-                                {msg.message_text}
-                              </div>
-                            </div>
-                          );
-                        })}
+                    </div>
+                  </CyberFrame>
+                </div>
+              ))}
+            </div>
                         <div ref={chatEndRef} />
                       </div>
 

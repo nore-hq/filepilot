@@ -14,7 +14,7 @@ const config = {
         burnt: '#C2410C',
       },
       fontFamily: {
-        heading: ['var(--font-syne)', 'sans-serif'],
+        heading: ['var(--font-playfair)', 'serif'],
       },
     },
   },

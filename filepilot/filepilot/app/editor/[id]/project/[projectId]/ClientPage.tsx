@@ -43,12 +43,14 @@ export default function EditorProjectWorkspace() {
   
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const [chatTarget, setChatTarget] = useState<'admin' | 'client'>('admin');
   
   const [localProgress, setLocalProgress] = useState<number | undefined>(undefined);
-  const [activeTab, setActiveTab] = useState<'chat'|'billing'>('chat');
+  const [deliveryLinkInput, setDeliveryLinkInput] = useState('');
+  const [activeTab, setActiveTab] = useState<'chat'|'admin_chat'|'billing'>('chat');
+  const [adminChatInput, setAdminChatInput] = useState('');
   const [wsConnected, setWsConnected] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const adminChatEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -137,6 +139,7 @@ export default function EditorProjectWorkspace() {
   }, [projectId]);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+  useEffect(() => { adminChatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages, activeTab]);
 
   const broadcastToRoom = async (payload: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -167,13 +170,28 @@ export default function EditorProjectWorkspace() {
     await broadcastToRoom({ type: 'progress', project_id: projectId, value: localProgress });
   };
 
+  const proposeDeliveryLink = async () => {
+    if (!deliveryLinkInput.trim() || !project) return;
+    if (project.editor_can_deliver) {
+      // Editor has direct delivery permission - send directly
+      setProject({ ...project, delivery_link: deliveryLinkInput });
+      await supabase.from('projects').update({ delivery_link: deliveryLinkInput }).eq('id', projectId);
+      await broadcastToRoom({ type: 'delivery', project_id: projectId, link: deliveryLinkInput });
+    } else {
+      // Editor proposes - admin must approve
+      setProject({ ...project, editor_proposed_link: deliveryLinkInput });
+      await supabase.from('projects').update({ editor_proposed_link: deliveryLinkInput }).eq('id', projectId);
+      await broadcastToRoom({ type: 'propose_link', project_id: projectId, link: deliveryLinkInput });
+    }
+  };
+
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || !project) return;
     const msgText = chatInput.trim();
     setChatInput('');
     
-    const target = project.editor_can_chat ? 'all' : chatTarget;
+    const target = 'all';
 
     setChatMessages(prev => [...prev, {
       id: Date.now(),
@@ -195,10 +213,42 @@ export default function EditorProjectWorkspace() {
     }
   };
 
+  const sendAdminMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminChatInput.trim() || !project) return;
+    const msgText = adminChatInput.trim();
+    setAdminChatInput('');
+
+    setChatMessages(prev => [...prev, {
+      id: Date.now(),
+      project_id: projectId,
+      sender_role: 'editor',
+      target_role: 'admin',
+      message_text: msgText,
+      created_at: new Date().toISOString(),
+    }]);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'chat',
+        project_id: projectId,
+        sender_role: 'editor',
+        target_role: 'admin',
+        message_text: msgText,
+      }));
+    }
+  };
+
   if (loading) return <div className="min-h-screen bg-parchment flex items-center justify-center font-bold text-noir/50">Loading Workspace...</div>;
   if (!project) return <div className="min-h-screen bg-parchment flex items-center justify-center font-bold text-noir/50">Project not found</div>;
 
   const currentProg = localProgress !== undefined ? localProgress : project.progress;
+
+  // Filter messages for admin-only private chat (editor <-> admin private messages only, not group)
+  const adminMessages = chatMessages.filter(m => 
+    (m.sender_role === 'editor' && m.target_role === 'admin') || 
+    (m.sender_role === 'admin' && m.target_role === 'editor')
+  );
 
   return (
     <div className="h-screen flex flex-col bg-parchment font-sans p-4 md:p-8">
@@ -236,6 +286,35 @@ export default function EditorProjectWorkspace() {
             )}
           </div>
 
+          {/* Delivery Link Section */}
+          {project.editor_can_deliver && (
+            <div className="mb-10">
+              <span className="text-[10px] uppercase tracking-[0.25em] font-bold text-noir/40 block mb-3">Final Delivery Link</span>
+              <div className="flex gap-2">
+                <input 
+                  type="text" 
+                  value={deliveryLinkInput} 
+                  onChange={(e) => setDeliveryLinkInput(e.target.value)} 
+                  placeholder="https://..." 
+                  className="flex-1 bg-noir/5 border-2 border-transparent px-3 py-2 text-sm font-medium text-noir outline-none focus:border-tarantino transition-colors" 
+                />
+                <button 
+                  onClick={proposeDeliveryLink} 
+                  className="bg-tarantino text-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-noir transition-colors" 
+                  style={{ clipPath: CPS }}
+                >
+                  Send
+                </button>
+              </div>
+              {project.delivery_link && (
+                <div className="mt-3 p-3 bg-noir/5">
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-noir/40 block mb-1">Current Link</span>
+                  <a href={project.delivery_link} target="_blank" className="text-xs text-tarantino underline break-all font-medium hover:text-noir">{project.delivery_link}</a>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mt-auto">
             <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-noir/30 mb-2 text-center">Connection Status</p>
             <div className="flex justify-center items-center gap-2 mb-4">
@@ -248,28 +327,37 @@ export default function EditorProjectWorkspace() {
         {/* Right Area: Workspace Tabs */}
         <div className="flex-1 flex flex-col min-h-0 bg-parchment relative">
           
+          {/* Tab Bar - All 3 tabs always visible */}
           <div className="flex border-b-2 border-noir/10 shrink-0">
-            <button onClick={() => setActiveTab('chat')} className={`flex-1 p-3 text-[10px] font-bold uppercase tracking-widest transition-colors ${activeTab === 'chat' ? 'bg-noir text-parchment' : 'bg-transparent text-noir hover:bg-noir/5'}`}>
-              Communication
+            <button 
+              onClick={() => setActiveTab('chat')} 
+              className={`flex-1 p-3 text-[10px] font-bold uppercase tracking-widest transition-colors ${activeTab === 'chat' ? 'bg-noir text-parchment' : 'bg-transparent text-noir hover:bg-noir/5'}`}
+            >
+              Group Chat {!project.editor_can_chat && '🔒'}
+            </button>
+            <button 
+              onClick={() => setActiveTab('admin_chat')} 
+              className={`flex-1 p-3 border-l-2 border-noir/10 text-[10px] font-bold uppercase tracking-widest transition-colors ${activeTab === 'admin_chat' ? 'bg-noir text-parchment' : 'bg-transparent text-noir hover:bg-noir/5'}`}
+            >
+              Admin Chat
             </button>
             {project.editor_can_invoice && (
-              <button onClick={() => setActiveTab('billing')} className={`flex-1 p-3 border-l-2 border-noir/10 text-[10px] font-bold uppercase tracking-widest transition-colors ${activeTab === 'billing' ? 'bg-tarantino text-white' : 'bg-transparent text-noir hover:bg-noir/5'}`}>
+              <button 
+                onClick={() => setActiveTab('billing')} 
+                className={`flex-1 p-3 border-l-2 border-noir/10 text-[10px] font-bold uppercase tracking-widest transition-colors ${activeTab === 'billing' ? 'bg-tarantino text-white' : 'bg-transparent text-noir hover:bg-noir/5'}`}
+              >
                 Billing & Invoices
               </button>
             )}
           </div>
 
+          {/* Tab Content */}
           {activeTab === 'chat' ? (
             project.editor_can_chat ? (
-              <div className="flex-1 flex flex-col min-h-0">
-                <div className="flex border-b-2 border-noir/5 shrink-0 bg-white">
-                  <button onClick={() => setChatTarget('admin')} className={`flex-1 p-2 text-[10px] font-bold uppercase tracking-widest transition-colors ${chatTarget === 'admin' ? 'bg-noir text-parchment' : 'bg-transparent text-noir hover:bg-noir/5'}`}>Admin Only Chat</button>
-                  <button onClick={() => setChatTarget('client')} className={`flex-1 p-2 border-l-2 border-noir/5 text-[10px] font-bold uppercase tracking-widest transition-colors ${chatTarget === 'client' ? 'bg-tarantino text-white' : 'bg-transparent text-noir hover:bg-noir/5'}`}>Client Chat</button>
-                </div>
-
+              <div className="flex-1 flex flex-col min-h-0 bg-parchment/30">
                 <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 custom-scrollbar">
-                  {chatMessages.filter(m => m.target_role === chatTarget || m.target_role === 'all' || m.sender_role === chatTarget).length === 0 && <div className="text-center text-noir/40 text-[10px] font-bold uppercase tracking-widest my-auto">No messages yet.</div>}
-                  {chatMessages.filter(m => m.target_role === chatTarget || m.target_role === 'all' || m.sender_role === chatTarget).map((msg) => {
+                  {chatMessages.filter(m => m.target_role === 'all').length === 0 && <div className="text-center text-noir/40 text-[10px] font-bold uppercase tracking-widest my-auto">No messages yet.</div>}
+                  {chatMessages.filter(m => m.target_role === 'all').map((msg) => {
                     const isMe = msg.sender_role === 'editor';
                     return (
                       <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
@@ -284,15 +372,52 @@ export default function EditorProjectWorkspace() {
                 </div>
 
                 <form onSubmit={sendMessage} className="p-4 border-t-2 border-noir/10 flex gap-3 bg-white shrink-0">
-                  <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." className="flex-1 bg-noir/5 outline-none px-4 text-sm font-medium focus:bg-noir/10 transition-colors" style={{ clipPath: CPS }} />
-                  <button type="submit" disabled={!wsConnected} className="bg-tarantino text-white px-6 py-3 text-xs font-bold uppercase disabled:opacity-50 active:scale-95 hover:-translate-y-0.5 transition-all" style={{ clipPath: CPS }}>Send</button>
+                  <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message to the group..." className="flex-1 bg-noir/5 outline-none px-4 py-3 text-sm font-medium focus:bg-noir/10 transition-colors" style={{ clipPath: CPS }} />
+                  <button type="submit" disabled={!wsConnected || !chatInput.trim()} className="bg-tarantino text-white px-6 py-3 text-xs font-bold uppercase disabled:opacity-50 active:scale-95 hover:-translate-y-0.5 transition-all" style={{ clipPath: CPS }}>Send</button>
                 </form>
               </div>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-center p-6 text-noir/40 font-bold uppercase tracking-widest text-xs">
-                Chat is currently disabled for this project.
+              <div className="flex-1 flex items-center justify-center p-6 bg-parchment/30">
+                <div className="bg-red-500/10 border border-red-500/20 p-8 text-center max-w-md w-full">
+                  <svg className="w-10 h-10 text-red-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                  <p className="text-sm font-black uppercase tracking-widest text-noir mb-2">Authorization Required</p>
+                  <p className="text-[10px] font-medium text-noir/60 uppercase tracking-widest mb-4">You are not allowed in the group chat.</p>
+                  <button 
+                    onClick={() => setActiveTab('admin_chat')} 
+                    className="bg-noir text-parchment px-6 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino transition-colors"
+                    style={{ clipPath: CPS }}
+                  >
+                    Chat with Admin Instead →
+                  </button>
+                </div>
               </div>
             )
+          ) : activeTab === 'admin_chat' ? (
+            <div className="flex-1 flex flex-col min-h-0 bg-parchment/30">
+              <div className="p-3 bg-noir/5 border-b border-noir/10 shrink-0">
+                <p className="text-[10px] uppercase tracking-widest font-bold text-noir/50 text-center">Private conversation with Admin</p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 custom-scrollbar">
+                {adminMessages.length === 0 && <div className="text-center text-noir/40 text-[10px] font-bold uppercase tracking-widest my-auto">No messages yet. Start a conversation with Admin.</div>}
+                {adminMessages.map((msg) => {
+                  const isMe = msg.sender_role === 'editor';
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      <span className="text-[9px] uppercase tracking-widest text-noir/40 font-bold mb-1">{msg.sender_role}</span>
+                      <div className={`px-5 py-3 text-sm max-w-[85%] font-medium ${isMe ? 'bg-noir text-parchment' : 'bg-white border border-noir/10 text-noir'}`} style={{ clipPath: CPS }}>
+                        {msg.message_text}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={adminChatEndRef} />
+              </div>
+
+              <form onSubmit={sendAdminMessage} className="p-4 border-t-2 border-noir/10 flex gap-3 bg-white shrink-0">
+                <input type="text" value={adminChatInput} onChange={(e) => setAdminChatInput(e.target.value)} placeholder="Message Admin..." className="flex-1 bg-noir/5 outline-none px-4 py-3 text-sm font-medium focus:bg-noir/10 transition-colors" style={{ clipPath: CPS }} />
+                <button type="submit" disabled={!wsConnected || !adminChatInput.trim()} className="bg-tarantino text-white px-6 py-3 text-xs font-bold uppercase disabled:opacity-50 active:scale-95 hover:-translate-y-0.5 transition-all" style={{ clipPath: CPS }}>Send</button>
+              </form>
+            </div>
           ) : (
             <div className="flex-1 min-h-0 bg-white">
               <InvoiceManager 

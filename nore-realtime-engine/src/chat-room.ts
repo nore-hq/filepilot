@@ -33,6 +33,9 @@ export class ChatRoom {
         const dummySender = {} as WebSocket;
         
         switch (data.type) {
+          case 'chat':
+            await this.handleChatMessage(dummySender, data);
+            break;
           case 'progress':
             await this.handleProgressUpdate(dummySender, data);
             break;
@@ -172,13 +175,17 @@ export class ChatRoom {
       await this.state.storage.setAlarm(Date.now() + 3000);
     }
 
-    this.broadcast(sender, {
+    const chatPayload = {
       type: 'chat',
       sender_role: data.sender_role,
       target_role: target,
       message_text: data.message_text,
       timestamp: new Date().toISOString(),
-    }, target);
+    };
+
+    // For 'all' target, broadcast to everyone except sender
+    // For private messages, broadcast to everyone so both parties see it in real-time
+    this.broadcast(sender, chatPayload);
   }
 
   async handleProgressUpdate(sender: WebSocket, data: any) {
@@ -202,12 +209,14 @@ export class ChatRoom {
       type: 'authority_update',
       project_id: data.project_id,
       editor_can_chat: data.editor_can_chat,
-      editor_can_deliver: data.editor_can_deliver
+      editor_can_deliver: data.editor_can_deliver,
+      editor_can_invoice: data.editor_can_invoice
     }, 'editor'); // Tell editor their authority changed
 
     await this.updateSupabaseProject(data.project_id, {
       editor_can_chat: data.editor_can_chat,
-      editor_can_deliver: data.editor_can_deliver
+      editor_can_deliver: data.editor_can_deliver,
+      editor_can_invoice: data.editor_can_invoice
     });
   }
 

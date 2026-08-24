@@ -50,12 +50,22 @@ export default function ClientDashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [showPreviousInvoices, setShowPreviousInvoices] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [mounted, setMounted] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ─── Browser Notifications ───
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+        Notification.requestPermission();
+      }
+    }
+  }, []);
 
   // ─── WebSocket Connection with Auto-Reconnect ───
   useEffect(() => {
@@ -108,6 +118,12 @@ export default function ClientDashboard() {
               break;
             case 'delivery':
               setProject((prev) => prev ? { ...prev, delivery_link: payload.link } : prev);
+              if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+                new Notification('FilePilot - Deliverables Ready', { 
+                  body: 'Your final deliverables have been sent! Click here to view.',
+                  icon: '/favicon.ico' // optional, generic
+                });
+              }
               break;
             case 'authority_update':
               setProject((prev) => prev ? { ...prev, editor_can_chat: payload.editor_can_chat, editor_can_deliver: payload.editor_can_deliver } : prev);
@@ -237,6 +253,85 @@ export default function ClientDashboard() {
           <p className="text-sm md:text-lg font-bold text-tarantino uppercase tracking-widest mt-2">{project.video_title}</p>
         </div>
 
+        {/* ─── Billing & Invoices (Moved to top) ─── */}
+        {invoices.length > 0 && (
+          <div className={`mb-12 transition-all duration-700 ease-out delay-100 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}`}>
+            <h2 className="font-heading text-2xl font-black uppercase tracking-tight text-noir mb-6 flex items-center gap-3">
+              <span className="text-tarantino">Current</span> Invoice
+              <span className="flex-1 h-px bg-gradient-to-r from-noir/10 to-transparent ml-4"></span>
+            </h2>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {/* Show most recent invoice */}
+              <CyberFrame key={invoices[0].id}>
+                <div className="p-6">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Invoice Date</div>
+                      <div className="text-sm font-bold text-noir">{new Date(invoices[0].created_at).toLocaleDateString()}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Amount</div>
+                      <div className="text-xl font-black text-tarantino leading-none mt-1">{invoices[0].currency_symbol}{invoices[0].total_amount.toLocaleString()}</div>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setSelectedInvoice(invoices[0])}
+                    className="w-full bg-noir text-parchment py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:text-white transition-colors mt-4" style={{ clipPath: 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))' }}
+                  >
+                    View & Download
+                  </button>
+                </div>
+              </CyberFrame>
+            </div>
+
+            {invoices.length > 1 && (
+              <div className="mt-8">
+                {!showPreviousInvoices ? (
+                  <button onClick={() => setShowPreviousInvoices(true)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-tarantino transition-colors flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                    View Previous Invoices
+                  </button>
+                ) : (
+                  <div className="mt-8 pt-8 border-t border-noir/10">
+                    <div className="flex justify-between items-center mb-6">
+                      <h3 className="font-heading text-lg font-black uppercase tracking-tight text-noir/60">Previous Invoices</h3>
+                      <button onClick={() => setShowPreviousInvoices(false)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-tarantino transition-colors flex items-center gap-2">
+                        Close
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 opacity-75">
+                      {invoices.slice(1).map(inv => (
+                        <CyberFrame key={inv.id}>
+                          <div className="p-6">
+                            <div className="flex justify-between items-start mb-4">
+                              <div>
+                                <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Invoice Date</div>
+                                <div className="text-sm font-bold text-noir">{new Date(inv.created_at).toLocaleDateString()}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Amount</div>
+                                <div className="text-xl font-black text-noir leading-none mt-1">{inv.currency_symbol}{inv.total_amount.toLocaleString()}</div>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => setSelectedInvoice(inv)}
+                              className="w-full bg-noir/10 text-noir py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:text-white transition-colors mt-4" style={{ clipPath: 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))' }}
+                            >
+                              View & Download
+                            </button>
+                          </div>
+                        </CyberFrame>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ─── Bento Grid ─── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* ══ Progress Card ══ */}
@@ -343,40 +438,6 @@ export default function ClientDashboard() {
           </CyberFrame>
         </div>
 
-        {/* ─── Billing & Invoices ─── */}
-        {invoices.length > 0 && (
-          <div className="mt-12 transition-all duration-700 ease-out delay-300">
-            <h2 className="font-heading text-2xl font-black uppercase tracking-tight text-noir mb-6 flex items-center gap-3">
-              <span className="text-tarantino">Billing</span> & Invoices
-              <span className="flex-1 h-px bg-gradient-to-r from-noir/10 to-transparent ml-4"></span>
-            </h2>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {invoices.map(inv => (
-                <CyberFrame key={inv.id}>
-                  <div className="p-6">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Invoice Date</div>
-                        <div className="text-sm font-bold text-noir">{new Date(inv.created_at).toLocaleDateString()}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Amount</div>
-                        <div className="text-xl font-black text-tarantino leading-none mt-1">{inv.currency_symbol}{inv.total_amount.toLocaleString()}</div>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => setSelectedInvoice(inv)}
-                      className="w-full bg-noir text-parchment py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:text-white transition-colors mt-4" style={{ clipPath: 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))' }}
-                    >
-                      View & Download
-                    </button>
-                  </div>
-                </CyberFrame>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Invoice Modal */}

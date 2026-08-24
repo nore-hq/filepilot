@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import InvoicePrintView from './InvoicePrintView';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -24,12 +25,13 @@ export default function InvoiceManager({
   clientName: string,
   videoTitle: string
 }) {
-  const [items, setItems] = useState<LineItem[]>([{ id: Date.now().toString(), desc: '', qty: 1, rate: 0 }]);
+  const [items, setItems] = useState<LineItem[]>([{ id: Math.random().toString(36).substring(7), desc: '', qty: 1, rate: 0 }]);
   const [currency, setCurrency] = useState('₹');
   const [presets, setPresets] = useState<Preset[]>([]);
   const [presetName, setPresetName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [previewInvoice, setPreviewInvoice] = useState<any>(null);
 
   useEffect(() => {
     fetchPresets();
@@ -40,7 +42,7 @@ export default function InvoiceManager({
     if (data) setPresets(data);
   };
 
-  const addItem = () => setItems([...items, { id: Date.now().toString(), desc: '', qty: 1, rate: 0 }]);
+  const addItem = () => setItems([...items, { id: Math.random().toString(36).substring(7), desc: '', qty: 1, rate: 0 }]);
   const removeItem = (id: string) => setItems(items.filter(i => i.id !== id));
   
   const updateItem = (id: string, field: keyof LineItem, value: any) => {
@@ -91,7 +93,7 @@ export default function InvoiceManager({
       alert('Failed to send invoice: ' + error.message);
     } else {
       alert('Invoice sent successfully to the client!');
-      setItems([{ id: Date.now().toString(), desc: '', qty: 1, rate: 0 }]);
+      setItems([{ id: Math.random().toString(36).substring(7), desc: '', qty: 1, rate: 0 }]);
     }
   };
 
@@ -187,12 +189,24 @@ export default function InvoiceManager({
             <div className="text-[10px] font-bold uppercase tracking-widest text-noir/50">Total Amount</div>
             <div className="text-2xl font-black text-noir">{currency}{totalAmount.toLocaleString()}</div>
           </div>
-          <button onClick={sendInvoice} disabled={isSending || totalAmount <= 0} className="bg-tarantino text-white px-8 py-3 text-sm font-bold uppercase tracking-widest hover:bg-noir transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>
-            {isSending ? 'Sending...' : 'Send Invoice'}
-          </button>
+          <div className="flex gap-2">
+            <button onClick={() => setPreviewInvoice({ id: 'DRAFT', total_amount: totalAmount, currency_symbol: currency, items, status: 'draft', created_at: new Date().toISOString() })} disabled={totalAmount <= 0} className="bg-noir text-parchment px-6 py-3 text-sm font-bold uppercase tracking-widest hover:bg-tarantino transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>
+              Preview
+            </button>
+            <button onClick={sendInvoice} disabled={isSending || totalAmount <= 0} className="bg-tarantino text-white px-8 py-3 text-sm font-bold uppercase tracking-widest hover:bg-noir transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>
+              {isSending ? 'Sending...' : 'Send Invoice'}
+            </button>
+          </div>
         </div>
         
       </div>
+      {previewInvoice && (
+        <InvoicePrintView 
+          invoice={previewInvoice} 
+          clientName={clientName} 
+          onClose={() => setPreviewInvoice(null)} 
+        />
+      )}
     </div>
   );
 }

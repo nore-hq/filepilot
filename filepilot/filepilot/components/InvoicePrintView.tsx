@@ -1,5 +1,6 @@
 'use client';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type LineItem = { id: string; desc: string; qty: number; rate: number };
 type Invoice = {
@@ -20,13 +21,17 @@ export default function InvoicePrintView({
   clientName: string,
   onClose: () => void 
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const handlePrint = () => {
     window.print();
   };
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto custom-scrollbar no-print-bg">
+  if (!mounted) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm overflow-y-auto custom-scrollbar no-print-bg">
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
           body * {
@@ -50,19 +55,19 @@ export default function InvoicePrintView({
         }
       `}} />
 
-      <div className="relative w-full max-w-3xl my-8">
-        {/* Controls */}
-        <div className="absolute -top-12 right-0 flex gap-4 no-print">
-          <button onClick={handlePrint} className="bg-tarantino text-white px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir transition-colors">
-            Print / Save PDF
-          </button>
-          <button onClick={onClose} className="bg-white text-noir px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-noir/10 transition-colors">
-            Close
-          </button>
-        </div>
+      {/* Controls - Fixed to viewport */}
+      <div className="fixed top-4 right-4 md:top-8 md:right-8 z-50 flex gap-4 no-print shadow-xl">
+        <button onClick={handlePrint} className="bg-tarantino text-white px-4 py-3 text-xs font-bold uppercase tracking-widest hover:bg-noir transition-colors shadow-lg">
+          Print / Save PDF
+        </button>
+        <button onClick={onClose} className="bg-white text-noir px-4 py-3 text-xs font-bold uppercase tracking-widest hover:bg-noir/10 transition-colors shadow-lg">
+          Close
+        </button>
+      </div>
 
+      <div className="flex flex-col items-center justify-start min-h-screen p-4 md:p-8 pt-24 md:pt-24">
         {/* Invoice Container */}
-        <div id="printable-invoice" className="bg-white text-noir p-10 md:p-16 shadow-2xl">
+        <div id="printable-invoice" className="relative w-full max-w-3xl bg-white text-noir p-10 md:p-16 shadow-2xl">
           
           <div className="flex justify-between items-start border-b-4 border-noir pb-8 mb-10">
             <div>
@@ -113,6 +118,7 @@ export default function InvoicePrintView({
 
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

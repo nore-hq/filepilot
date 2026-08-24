@@ -1,14 +1,14 @@
 import type { Metadata } from 'next';
-import { Syne } from 'next/font/google';
+import { Playfair_Display } from 'next/font/google';
 // @ts-ignore: allow side-effect CSS import without type declarations
 import './globals.css';
 import MaintenanceListener from '../components/MaintenanceListener';
 
 // 1. Configure the font and create a CSS variable
-const syne = Syne({ 
+const playfair = Playfair_Display({ 
   subsets: ['latin'], 
-  variable: '--font-syne',
-  weight: ['400', '500', '600', '700'] 
+  variable: '--font-playfair',
+  weight: ['400', '500', '600', '700', '800', '900'] 
 });
 
 // 2. Comprehensive Global SEO Metadata for norehq.com
@@ -316,7 +316,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(serviceSchema) }}
         />
       </head>
-      <body className={`bg-parchment antialiased ${syne.variable} relative`}>
+      <body className={`bg-parchment antialiased ${playfair.variable} relative`}>
         <MaintenanceListener />
         {children}
       </body>
