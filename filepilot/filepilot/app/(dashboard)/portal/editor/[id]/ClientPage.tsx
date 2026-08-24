@@ -270,20 +270,6 @@ export default function EditorDashboard() {
                 </div>
               ))}
             </div>
-                        <div ref={chatEndRef} />
-                      </div>
-
-                      <form onSubmit={sendMessage} className="p-2 border-t-2 border-noir flex gap-2 bg-parchment">
-                        <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." className="flex-1 bg-transparent outline-none px-2 text-sm" />
-                        <button type="submit" disabled={!wsConnected} className="bg-tarantino text-white px-4 py-2 text-xs font-bold uppercase disabled:opacity-50 active:scale-95 hover:-translate-y-0.5 transition-all" style={{ clipPath: CPS }}>Send</button>
-                      </form>
-                    </div>
-                  )}
-
-                </div>
-              </CyberFrame>
-              );
-            })}
           </div>
         )}
       </div>
