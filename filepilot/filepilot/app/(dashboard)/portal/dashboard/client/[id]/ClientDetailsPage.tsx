@@ -526,6 +526,9 @@ export default function ClientDetailsPage() {
                   </div>
                   <form onSubmit={sendEditorMessage} className="p-4 border-t-2 border-noir/10 flex gap-3 bg-white shrink-0">
                     <input type="text" value={editorChatInput} onChange={(e) => setEditorChatInput(e.target.value)} placeholder="Message Editor privately..." className="flex-1 bg-noir/5 border-2 border-transparent px-4 py-3 text-sm font-medium text-noir outline-none focus:border-tarantino transition-colors placeholder:text-noir/30" />
+                    <button type="submit" disabled={!wsConnected || !editorChatInput.trim()} className="bg-tarantino text-white px-8 py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-noir transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>Send</button>
+                  </form>
+                </div>
               ) : (
                 <div className="flex-1 overflow-y-auto pt-8 px-6 pb-12 custom-scrollbar bg-parchment/50 relative">
                   {/* Invoice Form */}
