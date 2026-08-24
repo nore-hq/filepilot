@@ -98,7 +98,7 @@ export default function InvoiceManager({
   };
 
   return (
-    <div className="flex flex-col h-full bg-parchment p-4 md:p-6 overflow-y-auto custom-scrollbar">
+    <div className="flex flex-col min-h-[500px] bg-parchment p-4 md:p-6 custom-scrollbar shrink-0">
       <div className="flex justify-between items-center mb-6">
         <div>
           <h2 className="text-xl font-black text-noir uppercase tracking-tight">Generate Invoice</h2>

@@ -17,6 +17,9 @@ type Project = {
   created_at: string; 
 };
 type Message = { id: number; project_id: string; sender_role: 'admin'|'editor'|'client'; target_role: string; message_text: string; created_at: string; };
+type Invoice = { id: string; total_amount: number; currency_symbol: string; items: any[]; status: string; created_at: string; };
+
+import InvoicePrintView from '../../../../../../components/InvoicePrintView';
 
 const CP = 'polygon(0 12px, 12px 0, calc(100% - 12px) 0, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0 calc(100% - 12px))';
 const CPS = 'polygon(0 4px, 4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px))';
@@ -54,6 +57,9 @@ export default function ClientDetailsPage() {
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [editorChatInput, setEditorChatInput] = useState('');
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [showPreviousInvoices, setShowPreviousInvoices] = useState(false);
   
   const [wsConnected, setWsConnected] = useState(false);
   
@@ -114,9 +120,10 @@ export default function ClientDetailsPage() {
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) { router.push('/portal/login'); return; }
 
-    const [projRes, edRes] = await Promise.all([
+    const [projRes, edRes, invRes] = await Promise.all([
       supabase.from('projects').select('*').eq('id', projectId).single(),
-      supabase.from('child_editors').select('*').eq('admin_id', u.user.id)
+      supabase.from('child_editors').select('*').eq('admin_id', u.user.id),
+      supabase.from('invoices').select('*').eq('project_id', projectId).order('created_at', { ascending: false })
     ]);
 
     if (projRes.data) {
@@ -125,6 +132,9 @@ export default function ClientDetailsPage() {
     }
     if (edRes.data) {
       setChildEditors(edRes.data);
+    }
+    if (invRes.data) {
+      setInvoices(invRes.data);
     }
     setLoading(false);
   };
@@ -516,23 +526,112 @@ export default function ClientDetailsPage() {
                   </div>
                   <form onSubmit={sendEditorMessage} className="p-4 border-t-2 border-noir/10 flex gap-3 bg-white shrink-0">
                     <input type="text" value={editorChatInput} onChange={(e) => setEditorChatInput(e.target.value)} placeholder="Message Editor privately..." className="flex-1 bg-noir/5 border-2 border-transparent px-4 py-3 text-sm font-medium text-noir outline-none focus:border-tarantino transition-colors placeholder:text-noir/30" />
-                    <button type="submit" disabled={!wsConnected || !editorChatInput.trim()} className="bg-tarantino text-white px-8 py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-noir transition-colors disabled:opacity-50" style={{ clipPath: CPS }}>Send</button>
-                  </form>
-                </div>
               ) : (
-                <InvoiceManager 
-                  projectId={project.id} 
-                  adminId={project.admin_id} 
-                  role="admin" 
-                  clientName={project.client_name} 
-                  videoTitle={project.video_title} 
-                />
+                <div className="flex-1 overflow-y-auto pt-8 px-6 pb-12 custom-scrollbar bg-parchment/50 relative">
+                  {/* Invoice Form */}
+                  <div className="mb-12">
+                    <InvoiceManager 
+                      projectId={project.id} 
+                      adminId={project.admin_id} 
+                      role="admin" 
+                      clientName={project.client_name} 
+                      videoTitle={project.video_title} 
+                    />
+                  </div>
+                  
+                  {/* Sent Invoices */}
+                  {invoices.length > 0 && (
+                    <div className="pt-8 border-t-2 border-noir/10">
+                      <h2 className="font-heading text-2xl font-black uppercase tracking-tight text-noir mb-6 flex items-center gap-3">
+                        <span className="text-tarantino">Current</span> Invoice
+                        <span className="flex-1 h-px bg-gradient-to-r from-noir/10 to-transparent ml-4"></span>
+                      </h2>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <CyberFrame key={invoices[0].id}>
+                          <div className="p-6">
+                            <div className="flex justify-between items-start mb-4">
+                              <div>
+                                <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Invoice Date</div>
+                                <div className="text-sm font-bold text-noir">{new Date(invoices[0].created_at).toLocaleDateString()}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Amount</div>
+                                <div className="text-xl font-black text-tarantino leading-none mt-1">{invoices[0].currency_symbol}{invoices[0].total_amount.toLocaleString()}</div>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => setSelectedInvoice(invoices[0])}
+                              className="w-full bg-noir text-parchment py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:text-white transition-colors mt-4" style={{ clipPath: CPS }}
+                            >
+                              View & Download
+                            </button>
+                          </div>
+                        </CyberFrame>
+                      </div>
+
+                      {invoices.length > 1 && (
+                        <div className="mt-8">
+                          {!showPreviousInvoices ? (
+                            <button onClick={() => setShowPreviousInvoices(true)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-tarantino transition-colors flex items-center gap-2">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                              View Previous Invoices
+                            </button>
+                          ) : (
+                            <div className="mt-8 pt-8 border-t border-noir/10">
+                              <div className="flex justify-between items-center mb-6">
+                                <h3 className="font-heading text-lg font-black uppercase tracking-tight text-noir/60">Previous Invoices</h3>
+                                <button onClick={() => setShowPreviousInvoices(false)} className="text-[10px] font-bold uppercase tracking-widest text-noir/50 hover:text-tarantino transition-colors flex items-center gap-2">
+                                  Close
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 opacity-75">
+                                {invoices.slice(1).map(inv => (
+                                  <CyberFrame key={inv.id}>
+                                    <div className="p-6">
+                                      <div className="flex justify-between items-start mb-4">
+                                        <div>
+                                          <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Invoice Date</div>
+                                          <div className="text-sm font-bold text-noir">{new Date(inv.created_at).toLocaleDateString()}</div>
+                                        </div>
+                                        <div className="text-right">
+                                          <div className="text-[10px] uppercase tracking-widest font-bold text-noir/40">Amount</div>
+                                          <div className="text-xl font-black text-noir leading-none mt-1">{inv.currency_symbol}{inv.total_amount.toLocaleString()}</div>
+                                        </div>
+                                      </div>
+                                      <button 
+                                        onClick={() => setSelectedInvoice(inv)}
+                                        className="w-full bg-noir/10 text-noir py-3 text-[10px] font-bold uppercase tracking-widest hover:bg-tarantino hover:text-white transition-colors mt-4" style={{ clipPath: CPS }}
+                                      >
+                                        View & Download
+                                      </button>
+                                    </div>
+                                  </CyberFrame>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
           </CyberFrame>
         </div>
       </div>
+      
+      {/* Invoice Modal */}
+      {selectedInvoice && (
+        <InvoicePrintView 
+          invoice={selectedInvoice} 
+          clientName={project.client_name} 
+          onClose={() => setSelectedInvoice(null)} 
+        />
+      )}
     </div>
   );
 }
