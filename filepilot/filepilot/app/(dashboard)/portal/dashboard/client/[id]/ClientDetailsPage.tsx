@@ -520,15 +520,13 @@ export default function ClientDetailsPage() {
                   </form>
                 </div>
               ) : (
-                <div className="pt-8 px-6 pb-6 h-full overflow-y-auto">
-                  <InvoiceManager 
-                    projectId={project.id} 
-                    adminId={project.admin_id} 
-                    role="admin" 
-                    clientName={project.client_name} 
-                    videoTitle={project.video_title} 
-                  />
-                </div>
+                <InvoiceManager 
+                  projectId={project.id} 
+                  adminId={project.admin_id} 
+                  role="admin" 
+                  clientName={project.client_name} 
+                  videoTitle={project.video_title} 
+                />
               )}
             </div>
 
