@@ -87,8 +87,8 @@ export default function ClientDetailsPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 custom-scrollbar">
-        {chatMessages.filter(m => m.target_role === 'all').length === 0 && <div className="text-center text-noir/40 text-xs font-bold uppercase tracking-widest my-auto">No messages yet. Start the conversation.</div>}
-        {chatMessages.filter(m => m.target_role === 'all').map((msg) => {
+        {chatMessages.filter(m => m.target_role === 'all' || m.target_role === 'client' || (m.sender_role === 'client' && m.target_role === 'admin')).length === 0 && <div className="text-center text-noir/40 text-xs font-bold uppercase tracking-widest my-auto">No messages yet. Start the conversation.</div>}
+        {chatMessages.filter(m => m.target_role === 'all' || m.target_role === 'client' || (m.sender_role === 'client' && m.target_role === 'admin')).map((msg) => {
           const isAdmin = msg.sender_role === 'admin';
           return (
             <div key={msg.id} className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}>
@@ -294,7 +294,7 @@ export default function ClientDetailsPage() {
     const msgText = chatInput.trim();
     setChatInput('');
     
-    const target = 'all';
+    const target = project.editor_can_chat ? 'all' : 'client';
 
     setChatMessages(prev => [...prev, {
       id: Date.now(),

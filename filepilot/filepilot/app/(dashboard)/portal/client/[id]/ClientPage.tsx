@@ -155,11 +155,13 @@ export default function ClientDashboard() {
     setChatInput('');
 
     // Optimistically add to local state
+    const target = project.editor_can_chat ? 'all' : 'admin';
+
     setMessages(prev => [...prev, {
       id: Date.now(),
       project_id: projectId,
       sender_role: 'client' as const,
-      target_role: 'admin',
+      target_role: target,
       message_text: msgText,
       created_at: new Date().toISOString(),
     }]);
@@ -169,7 +171,7 @@ export default function ClientDashboard() {
         type: 'chat',
         project_id: projectId,
         sender_role: 'client',
-        target_role: 'admin',
+        target_role: target,
         message_text: msgText,
       }));
     }
