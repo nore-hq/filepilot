@@ -184,7 +184,7 @@ export default function ClientDashboard() {
   // ─── WebSocket: Send chat message via Cloudflare ───
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim()) return;
+    if (!chatInput.trim() || !project) return;
     const msgText = chatInput.trim();
     setChatInput('');
 
